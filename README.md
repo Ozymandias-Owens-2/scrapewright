@@ -1,5 +1,9 @@
 # scrapewright
 
+[![PyPI](https://img.shields.io/pypi/v/scrapewright)](https://pypi.org/project/scrapewright/)
+[![Python](https://img.shields.io/pypi/pyversions/scrapewright)](https://pypi.org/project/scrapewright/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 **Give it a store URL. It writes the scraper.**
 
 Most e-commerce catalog scraping splits into two worlds: sites on a known
