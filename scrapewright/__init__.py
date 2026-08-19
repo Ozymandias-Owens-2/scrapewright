@@ -12,15 +12,17 @@ Public API:
 """
 
 from .cache import RecipeCache
+from .crawl import Frontier
 from .detect import Detection, detect
 from .models import Product, parse_price
 from .pipeline import Scrapewright, check
 from .validate import Coverage, coverage
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Scrapewright",
+    "Frontier",
     "Product",
     "Detection",
     "detect",

@@ -63,6 +63,12 @@ for product in sw.scrape_catalog("https://shop.example.com", max_items=200):
 # Every later call on that domain: replayed from the cached recipe, no LLM.
 item = sw.scrape_page("https://boutique.example.com/products/wool-coat")
 print(item.model_dump(exclude={"raw"}))
+
+# Crawl mode — walk a WHOLE custom store from one listing/category URL.
+# The frontier discovers product pages (deterministic, free); the first page
+# pays the single synthesis cost, every other page replays the recipe.
+for product in sw.crawl("https://boutique.example.com/collection", max_items=100):
+    print(product.title, product.price)
 ```
 
 ### CLI
@@ -70,10 +76,15 @@ print(item.model_dump(exclude={"raw"}))
 ```bash
 scrapewright detect https://shop.example.com          # what platform is this?
 scrapewright run    https://shop.example.com --max 50 # scrape a catalog → JSONL
+scrapewright crawl  https://boutique.example.com/collection -o products.xlsx
+scrapewright run    https://shop.example.com -o products.csv   # Excel-ready CSV
 scrapewright add    https://boutique.example.com/products/coat  # learn a site
 scrapewright run    https://boutique.example.com/products/coat --no-llm
 scrapewright list                                     # cached recipe domains
 ```
+
+`-o` writes `.csv` (Excel-ready, UTF-8 BOM), `.xlsx` (`pip install scrapewright[excel]`),
+or `.jsonl`; without it, products stream to stdout as JSONL.
 
 ## The `Product` shape
 
@@ -104,20 +115,24 @@ the number a recipe is trusted on before it's cached.
 | `extract/jsonld` | schema.org/Product from `<script type="application/ld+json">` — free, ~common |
 | `extract/llm` | Synthesizes a `SelectorRecipe` from HTML — the one-time compile step |
 | `extract/selectors` | Replays a recipe with BeautifulSoup — the deterministic runtime |
+| `crawl` | Frontier: turns one listing URL into product URLs (pattern match + card-template fallback + pagination) — deterministic, no LLM |
 | `cache` | Persists recipes keyed by domain, so the compile happens once |
 | `validate` | Field-coverage scoring |
-| `pipeline` | Orchestrates detect → extract → validate → cache |
+| `export` | Batch → `.csv` / `.xlsx` / `.jsonl` |
+| `pipeline` | Orchestrates detect → extract → validate → cache → heal |
 
 ## Design notes
 
 - **Deterministic paths run first.** Shopify JSON, the WooCommerce Store API, and
   JSON-LD cover a large share of real stores for free. The LLM is only ever
   reached for genuinely custom HTML.
-- **Self-healing is a natural extension.** Because a recipe's quality is
-  measured (field coverage), a drop in coverage is the signal to re-synthesize —
-  a site changing its DOM heals on the next run rather than silently returning
-  empty fields. (v0.1 ships the measurement; automatic re-synthesis is on the
-  roadmap.)
+- **Self-healing.** When a cached recipe stops producing usable products — the
+  site changed its DOM — the page falls through to the free JSON-LD path and,
+  failing that, a fresh synthesis replaces the stale recipe. A broken site heals
+  on the next run instead of silently returning empty fields.
+- **Bounded model spend.** Batch and crawl runs cap LLM calls at
+  `max_synth_per_run` (default 3) — a site that resists synthesis cannot burn
+  one model call per page. The bill is bounded no matter how large the crawl.
 - **Provider-configurable.** The LLM extractor takes a `model` and works with any
   injected client; the default targets Anthropic's Claude via the official SDK.
 
@@ -133,11 +148,16 @@ pytest
 
 ## Status
 
-v0.1 (alpha). Catalog extraction (Shopify, WooCommerce), page extraction
-(JSON-LD, LLM-synthesized selectors), recipe caching, and coverage validation
-are implemented and tested. Roadmap: automatic re-synthesis on coverage drop,
-BigCommerce / Salesforce Commerce detectors, and a crawl frontier so page mode
-can walk a whole custom site from a category URL.
+v0.2 (alpha). Implemented and tested: catalog extraction (Shopify, WooCommerce),
+page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
+**self-healing re-synthesis** with a bounded per-run model budget, a
+**crawl frontier** (one listing URL → the whole store), coverage validation, and
+CSV / XLSX / JSONL export.
+
+Roadmap: schema-agnostic extraction (bring your own field schema — the same
+compile-once/replay-free loop for any structured site, not just product pages),
+BigCommerce / Salesforce Commerce detectors, and JS-rendered-page support via an
+optional Playwright fetcher.
 
 ## License
 

@@ -8,6 +8,7 @@ import sys
 
 from .cache import RecipeCache
 from .detect import detect
+from .export import write_products
 from .pipeline import Scrapewright
 
 
@@ -21,6 +22,17 @@ def cmd_detect(args) -> int:
     return 0
 
 
+def _deliver(products, out: str | None, label: str) -> None:
+    """Either stream JSONL to stdout or write a .csv/.xlsx/.jsonl file."""
+    if out:
+        path = write_products(products, out)
+        print(f"# {len(products)} products from {label} -> {path}", file=sys.stderr)
+    else:
+        for p in products:
+            _emit(p)
+        print(f"# {len(products)} products from {label}", file=sys.stderr)
+
+
 def cmd_run(args) -> int:
     sw = Scrapewright()
     if args.page:
@@ -28,7 +40,7 @@ def cmd_run(args) -> int:
         if product is None:
             print("no product extracted", file=sys.stderr)
             return 1
-        _emit(product)
+        _deliver([product], args.out, "page")
         return 0
 
     det = detect(args.url)
@@ -38,15 +50,19 @@ def cmd_run(args) -> int:
         if product is None:
             print("no product extracted (try a direct product URL)", file=sys.stderr)
             return 1
-        _emit(product)
+        _deliver([product], args.out, "page")
         return 0
 
-    count = 0
-    for product in sw.scrape_catalog(args.url, max_items=args.max):
-        _emit(product)
-        count += 1
-    print(f"# {count} products from {det.kind}", file=sys.stderr)
+    products = list(sw.scrape_catalog(args.url, max_items=args.max))
+    _deliver(products, args.out, det.kind)
     return 0
+
+
+def cmd_crawl(args) -> int:
+    sw = Scrapewright()
+    products = list(sw.crawl(args.url, max_items=args.max, allow_llm=not args.no_llm))
+    _deliver(products, args.out, "crawl")
+    return 0 if products else 1
 
 
 def cmd_add(args) -> int:
@@ -86,7 +102,15 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--max", type=int, default=None, help="Cap catalog items")
     r.add_argument("--page", action="store_true", help="Force single-page mode")
     r.add_argument("--no-llm", action="store_true", help="Never call the LLM; deterministic paths only")
+    r.add_argument("-o", "--out", default=None, help="Write to a file: .csv, .xlsx, or .jsonl")
     r.set_defaults(func=cmd_run)
+
+    c = sub.add_parser("crawl", help="Walk a whole store from one listing/category URL")
+    c.add_argument("url")
+    c.add_argument("--max", type=int, default=None, help="Cap total products")
+    c.add_argument("--no-llm", action="store_true", help="Never call the LLM; deterministic paths only")
+    c.add_argument("-o", "--out", default=None, help="Write to a file: .csv, .xlsx, or .jsonl")
+    c.set_defaults(func=cmd_crawl)
 
     a = sub.add_parser("add", help="Synthesize and cache a recipe for a custom-HTML product page")
     a.add_argument("url")
