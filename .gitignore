@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# scrapewright cache + local secrets
+.scrapewright/
+recipes.json
+.env
+
+# OS
+.DS_Store
+Thumbs.db
