@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 
 from .base import SelectorRecipe
 
@@ -52,6 +52,9 @@ Rules:
   to "text").
 - "images" should match the gallery <img> elements; its mode is usually
   "attr:src".
+- Search the WHOLE document for the price before giving up on it — on many
+  sites it sits far below the title, in a buy box, sticky bar, or configurator
+  near the end of the markup.
 - Use null for any field the page does not expose.
 
 HTML:
@@ -60,14 +63,38 @@ HTML:
 ```"""
 
 
-def reduce_html(html: str, cap: int = 14000) -> str:
-    """Strip script/style/noise and collapse whitespace so a product page
-    fits comfortably in one prompt."""
+# Attributes that carry huge values (responsive image sets, inline styles,
+# data blobs) and contribute nothing to choosing a selector.
+_BULKY_ATTRS = ("srcset", "data-srcset", "sizes", "style", "content")
+_ATTR_VALUE_CAP = 120
+
+# Whole-document cap. Generous on purpose: synthesis happens once per site, and
+# a browser-rendered page can easily run past 90k characters — the field you
+# need (the price, typically) is often past the halfway mark, so an aggressive
+# cap silently produces a recipe with holes in it.
+DEFAULT_HTML_CAP = 200_000
+
+
+def reduce_html(html: str, cap: int = DEFAULT_HTML_CAP) -> str:
+    """Strip noise so a product page reaches the model cheaply and intact.
+
+    Removes scripts/styles/SVG, drops comments, and truncates bulky attribute
+    values — keeping the structural signal (tags, ids, classes) that selector
+    synthesis actually depends on.
+    """
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "svg", "noscript"]):
+    for tag in soup(["script", "style", "svg", "noscript", "template"]):
         tag.decompose()
-    text = str(soup)
-    text = re.sub(r"\s+", " ", text)
+    for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
+        comment.extract()
+    for tag in soup.find_all(True):
+        for attr in list(tag.attrs):
+            value = tag.attrs[attr]
+            if not isinstance(value, str):
+                continue
+            if attr in _BULKY_ATTRS or len(value) > _ATTR_VALUE_CAP:
+                tag.attrs[attr] = value[:_ATTR_VALUE_CAP]
+    text = re.sub(r"\s+", " ", str(soup))
     return text[:cap]
 
 
@@ -98,10 +125,11 @@ class LlmExtractor:
     """Wraps the Anthropic call that turns HTML into a recipe."""
 
     def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None,
-                 client=None):
+                 client=None, html_cap: int = DEFAULT_HTML_CAP):
         self.model = model
         self._client = client
         self._api_key = api_key
+        self.html_cap = html_cap
 
     def _get_client(self):
         if self._client is not None:
@@ -118,7 +146,7 @@ class LlmExtractor:
 
     def synthesize(self, html: str, url: str) -> SelectorRecipe | None:
         """Ask Claude for a recipe covering this page. One call per site."""
-        prompt = _PROMPT.format(html=reduce_html(html))
+        prompt = _PROMPT.format(html=reduce_html(html, cap=self.html_cap))
         client = self._get_client()
         msg = client.messages.create(
             model=self.model,

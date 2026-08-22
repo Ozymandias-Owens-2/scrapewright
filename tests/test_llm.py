@@ -1,4 +1,4 @@
-from scrapewright.extract.llm import LlmExtractor, recipe_from_text
+from scrapewright.extract.llm import LlmExtractor, recipe_from_text, reduce_html
 
 MODEL_REPLY = """Here is the extractor:
 ```json
@@ -27,6 +27,34 @@ def test_recipe_from_text_tolerates_fences_and_prose():
 def test_recipe_from_text_rejects_garbage():
     assert recipe_from_text("no json here") is None
     assert recipe_from_text('{"modes": {}}') is None   # no real fields
+
+
+def test_reduce_html_drops_noise_but_keeps_structure():
+    srcset = "/img-1200.jpg 1200w, " * 200
+    html = (
+        "<html><head><style>.x{color:red}</style>"
+        "<script>var a=1</script></head>"
+        "<body><!-- build 42 -->"
+        f'<img class="hero" src="/a.jpg" srcset="{srcset}">'
+        '<div class="price">€1290</div>'
+        "</body></html>"
+    )
+    out = reduce_html(html)
+    assert "var a=1" not in out and ".x{color:red}" not in out
+    assert "build 42" not in out
+    assert 'class="hero"' in out and 'class="price"' in out   # selectors survive
+    assert "€1290" in out
+    assert len(out) < 1500                                    # srcset bulk gone
+
+
+def test_reduce_html_reaches_content_deep_in_a_large_page():
+    """Regression: a 90k-char rendered page hid the price past the old 14k cap,
+    so synthesis produced a recipe with price=null."""
+    filler = "<div class='row'>lorem ipsum dolor sit amet</div>" * 2000
+    html = f"<html><body>{filler}<div class='price'>€1600</div></body></html>"
+    assert len(html) > 80_000
+    out = reduce_html(html)
+    assert "€1600" in out
 
 
 class _FakeBlock:

@@ -28,7 +28,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from .http import get, make_session
+from .fetch import StaticFetcher, looks_js_shelled
 
 PRODUCT_PATH = re.compile(r"/(?:products?|item|itm|prod|p)/[^/?#]+/?$", re.IGNORECASE)
 NEXT_LABELS = {"next", "next page", "›", "»", "→", ">", "older"}
@@ -36,9 +36,17 @@ MIN_GROUP = 3
 
 
 class Frontier:
-    def __init__(self, session: requests.Session | None = None,
-                 max_listing_pages: int = 5):
-        self.session = session or make_session()
+    """Turns one listing URL into a stream of product URLs.
+
+    ``js_fetcher`` is optional: when a listing renders its grid client-side,
+    the static fetch yields no product links and the frontier retries that page
+    in a browser rather than giving up.
+    """
+
+    def __init__(self, fetcher=None, session: requests.Session | None = None,
+                 js_fetcher=None, max_listing_pages: int = 5):
+        self.fetcher = fetcher or StaticFetcher(session)
+        self.js_fetcher = js_fetcher
         self.max_listing_pages = max_listing_pages
 
     # ── public ───────────────────────────────────────────────────────────────
@@ -54,10 +62,10 @@ class Frontier:
                 break
             seen_pages.add(url)
 
-            r = get(url, session=self.session)
-            if r.status_code != 200:
+            html = self._fetch_listing(url)
+            if html is None:
                 break
-            soup = BeautifulSoup(r.text, "html.parser")
+            soup = BeautifulSoup(html, "html.parser")
 
             for product_url in self._product_links(soup, url):
                 if product_url not in seen_products:
@@ -65,6 +73,19 @@ class Frontier:
                     yield product_url
 
             url = self._next_page(soup, url)
+
+    def _fetch_listing(self, url: str) -> str | None:
+        """Static first; escalate to the browser when the page is a JS shell or
+        exposes no product links at all."""
+        html = self.fetcher.fetch(url)
+        if self.js_fetcher is None:
+            return html
+        if html is None or looks_js_shelled(html):
+            return self.js_fetcher.fetch(url) or html
+        soup = BeautifulSoup(html, "html.parser")
+        if not self._product_links(soup, url):
+            return self.js_fetcher.fetch(url) or html
+        return html
 
     # ── link extraction ──────────────────────────────────────────────────────
     def _same_host_links(self, soup: BeautifulSoup, base_url: str) -> list[tuple[str, object]]:

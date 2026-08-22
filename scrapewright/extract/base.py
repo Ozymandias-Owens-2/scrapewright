@@ -39,6 +39,10 @@ class SelectorRecipe(BaseModel):
     description: str | None = None
     sku: str | None = None
     modes: dict[str, str] = Field(default_factory=dict)
+    # True when this recipe was synthesized from browser-rendered HTML, i.e. the
+    # site renders its content client-side. Replaying it against a plain HTTP
+    # fetch would match nothing, so the pipeline goes straight to the browser.
+    needs_js: bool = False
     # Free-text note on how the recipe was derived (model name, timestamp).
     origin: str = ""
 

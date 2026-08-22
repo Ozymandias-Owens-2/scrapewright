@@ -47,8 +47,9 @@ cares which path a record came from.
 ## Install
 
 ```bash
-pip install scrapewright          # deterministic paths (Shopify, Woo, JSON-LD)
-pip install "scrapewright[llm]"   # + LLM recipe synthesis for custom HTML
+pip install scrapewright               # deterministic paths (Shopify, Woo, JSON-LD)
+pip install "scrapewright[llm]"        # + LLM recipe synthesis for custom HTML
+pip install "scrapewright[llm,js,excel]" && playwright install chromium   # + JS rendering, XLSX
 ```
 
 ## Use it
@@ -90,6 +91,22 @@ scrapewright list                                     # cached recipe domains
 `-o` writes `.csv` (Excel-ready, UTF-8 BOM), `.xlsx` (`pip install scrapewright[excel]`),
 or `.jsonl`; without it, products stream to stdout as JSONL.
 
+### Client-side-rendered stores
+
+Add `--js` (or `Scrapewright(js=True)`) and pages that render their catalog in the
+browser become extractable:
+
+```bash
+scrapewright run https://spa-store.example.com/products/x --page --js
+scrapewright crawl https://spa-store.example.com/shop --js -o products.xlsx
+```
+
+Rendering stays **rare by construction**: the static fetch runs first, and Chromium is
+only started when the static HTML is an empty client-side shell or extraction on it
+fails. A recipe learned from rendered HTML is tagged `needs_js`, so later runs on that
+site skip the wasted static hop. The browser starts at most once per run and is reused
+for every page.
+
 ## The `Product` shape
 
 ```python
@@ -119,6 +136,7 @@ the number a recipe is trusted on before it's cached.
 | `extract/jsonld` | schema.org/Product from `<script type="application/ld+json">` — free, ~common |
 | `extract/llm` | Synthesizes a `SelectorRecipe` from HTML — the one-time compile step |
 | `extract/selectors` | Replays a recipe with BeautifulSoup — the deterministic runtime |
+| `fetch` | `StaticFetcher` (plain HTTP) and `BrowserFetcher` (headless Chromium), plus the shell heuristic that decides when a render is worth paying for |
 | `crawl` | Frontier: turns one listing URL into product URLs (pattern match + card-template fallback + pagination) — deterministic, no LLM |
 | `cache` | Persists recipes keyed by domain, so the compile happens once |
 | `validate` | Field-coverage scoring |
@@ -152,16 +170,19 @@ pytest
 
 ## Status
 
-v0.2 (alpha). Implemented and tested: catalog extraction (Shopify, WooCommerce),
+v0.3 (alpha). Implemented and tested: catalog extraction (Shopify, WooCommerce),
 page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
 **self-healing re-synthesis** with a bounded per-run model budget, a
-**crawl frontier** (one listing URL → the whole store), coverage validation, and
-CSV / XLSX / JSONL export.
+**crawl frontier** (one listing URL → the whole store), **JS rendering via an
+optional Playwright fetcher** with automatic escalation, coverage validation, and
+CSV / XLSX / JSONL export. 42 offline tests.
+
+Known limits, stated plainly: it does not defeat anti-bot walls (deliberately out
+of scope), and the schema is products-only for now.
 
 Roadmap: schema-agnostic extraction (bring your own field schema — the same
 compile-once/replay-free loop for any structured site, not just product pages),
-BigCommerce / Salesforce Commerce detectors, and JS-rendered-page support via an
-optional Playwright fetcher.
+and BigCommerce / Salesforce Commerce detectors.
 
 ## License
 
