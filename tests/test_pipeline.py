@@ -29,7 +29,7 @@ class _FakeLLM:
         self.recipe = recipe
         self.calls = 0
 
-    def synthesize(self, html, url):
+    def synthesize(self, html, url, schema=None):
         self.calls += 1
         return self.recipe
 

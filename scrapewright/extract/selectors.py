@@ -4,18 +4,21 @@ This is the payoff of the whole design. Once :mod:`scrapewright.extract.llm`
 has synthesized a recipe for a site (or a human has hand-written one), every
 subsequent page on that site is parsed here with plain BeautifulSoup at zero
 marginal cost. The LLM is a one-time compiler; this is the runtime.
+
+The replay is schema-driven: it reads whatever fields the recipe carries, so
+the same code serves the built-in product schema and any caller-defined one.
 """
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from ..models import Product
+from ..models import Product, Record
+from ..schema import PRODUCT_SCHEMA, Schema
 from .base import Extractor, SelectorRecipe
-
-_TEXT_FIELDS = ("title", "price", "brand", "description", "sku")
 
 
 def _read(el, mode: str) -> str | None:
@@ -32,36 +35,52 @@ class SelectorExtractor(Extractor):
     kind = "selector"
     is_catalog = False
 
-    def __init__(self, recipe: SelectorRecipe):
+    def __init__(self, recipe: SelectorRecipe, schema: Schema = PRODUCT_SCHEMA):
         self.recipe = recipe
+        self.schema = schema
+
+    def extract_values(self, html: str, url: str) -> dict[str, Any]:
+        """Pull every field the recipe knows about. Values are raw strings
+        (or lists of URLs); typing is the caller's job."""
+        soup = BeautifulSoup(html, "html.parser")
+        list_fields = self.schema.list_fields
+        values: dict[str, Any] = {}
+
+        for field, selector in self.recipe.fields.items():
+            if not selector:
+                continue
+            mode = self.recipe.mode_for(field)
+            wants_many = field in list_fields or mode.startswith("attr_all:")
+
+            if wants_many:
+                attr = mode.split(":", 1)[1] if ":" in mode else "src"
+                found = []
+                for el in soup.select(selector):
+                    raw = el.get(attr) if attr != "text" else el.get_text(strip=True)
+                    if raw:
+                        found.append(urljoin(url, raw) if attr in ("src", "href") else raw)
+                if found:
+                    values[field] = found
+            else:
+                value = _read(soup.select_one(selector), mode)
+                if value:
+                    values[field] = value
+
+        return values
+
+    def extract_record(self, html: str, url: str) -> Record | None:
+        values = self.extract_values(html, url)
+        if not self.schema.is_satisfied_by(values):
+            # Return what we found anyway when *something* landed — the caller
+            # decides whether a partial record is worth keeping.
+            if not values:
+                return None
+        return Record(url=url, schema_name=self.schema.name, data=values,
+                      source_platform="selector")
 
     def extract_page(self, html: str, url: str) -> Product | None:
-        soup = BeautifulSoup(html, "html.parser")
-        r = self.recipe
-        data: dict[str, object] = {}
-
-        for field in _TEXT_FIELDS:
-            sel = getattr(r, field)
-            if not sel:
-                continue
-            el = soup.select_one(sel)
-            data[field] = _read(el, r.mode_for(field))
-
-        if r.images:
-            mode = r.mode_for("images")
-            attr = mode.split(":", 1)[1] if ":" in mode else "src"
-            urls = [el.get(attr) for el in soup.select(r.images) if el.get(attr)]
-            data["images"] = [urljoin(url, u) for u in urls]
-
-        if not data.get("title"):
+        """Product-schema adapter, kept for the typed path."""
+        record = self.extract_record(html, url)
+        if record is None or not record.data.get("title"):
             return None
-        return Product(
-            url=url,
-            title=str(data.get("title") or ""),
-            brand=data.get("brand"),
-            price=data.get("price"),
-            description=data.get("description"),
-            sku=data.get("sku"),
-            images=data.get("images", []),  # type: ignore[arg-type]
-            source_platform="selector",
-        )
+        return record.to_product()

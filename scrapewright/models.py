@@ -85,3 +85,33 @@ class Product(BaseModel):
 
     def is_usable(self) -> bool:
         return all(self.core_fields_present().values())
+
+
+class Record(BaseModel):
+    """A schema-agnostic extraction result.
+
+    :class:`Product` stays the typed shape for the built-in product schema;
+    ``Record`` is what comes back for a caller-defined schema, where the field
+    set is only known at runtime.
+    """
+
+    url: str
+    schema_name: str = "custom"
+    data: dict[str, Any] = Field(default_factory=dict)
+    source_platform: str | None = None
+
+    def get(self, field: str, default: Any = None) -> Any:
+        return self.data.get(field, default)
+
+    def to_product(self) -> Product:
+        """Adapt a product-schema record into the typed model."""
+        return Product(
+            url=self.url,
+            title=str(self.data.get("title") or ""),
+            brand=self.data.get("brand"),
+            price=self.data.get("price"),
+            description=self.data.get("description"),
+            sku=self.data.get("sku"),
+            images=list(self.data.get("images") or []),
+            source_platform=self.source_platform,
+        )

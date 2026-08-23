@@ -1,24 +1,29 @@
 """The orchestrator: fetch → detect → extract → validate → cache → heal.
 
-Three entry points:
+Entry points:
 
+* :meth:`Scrapewright.extract` — the general one. Pull any declared
+  :class:`~scrapewright.schema.Schema` off any page, returning a
+  :class:`~scrapewright.models.Record`.
+* :meth:`Scrapewright.scrape_page` — the typed product path (a thin wrapper
+  over ``extract`` that returns a :class:`~scrapewright.models.Product`).
 * :meth:`Scrapewright.scrape_catalog` — platforms with a product list API
   (Shopify, WooCommerce). Deterministic, free.
-* :meth:`Scrapewright.scrape_page` — one product page. Order: cached recipe →
-  JSON-LD → LLM synthesis. **Self-healing:** a cached recipe that stops
-  producing usable products falls through to the free paths and, failing those,
-  is replaced by a fresh synthesis. **Browser escalation:** when the static
-  fetch is a client-side shell (or extraction fails on it) and JS mode is on,
-  the page is re-fetched in a real browser and the chain runs again; a recipe
-  learned that way is tagged ``needs_js`` so later runs skip straight to the
-  browser.
-* :meth:`Scrapewright.crawl` — a listing URL on ANY site. Known platforms route
-  to catalog mode; custom sites go through the
-  :class:`~scrapewright.crawl.Frontier` and page mode.
+* :meth:`Scrapewright.crawl` / :meth:`Scrapewright.crawl_records` — a listing
+  URL on ANY site.
 
-Expensive things stay rare by construction: the LLM runs once per site (capped
-at ``max_synth_per_run`` per run), and the browser starts at most once per run
-and only for sites that actually need it.
+Three policies keep the expensive things rare:
+
+**Self-healing** — a cached recipe that stops producing usable records falls
+through to the free paths and, failing those, is replaced by a fresh synthesis.
+
+**Browser escalation** — when the static fetch is a client-side shell (or
+extraction fails on it) and JS mode is on, the page is re-fetched in a real
+browser and the chain runs again; a recipe learned that way is tagged
+``needs_js`` so later runs skip straight to the browser.
+
+**Bounded spend** — the LLM runs once per site, capped at
+``max_synth_per_run`` per run; the browser starts at most once per run.
 """
 
 from __future__ import annotations
@@ -36,11 +41,27 @@ from .extract.selectors import SelectorExtractor
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
 from .fetch import BrowserFetcher, StaticFetcher, looks_js_shelled
-from .models import Product
+from .models import Product, Record
+from .schema import PRODUCT_SCHEMA, Schema
 from .validate import Coverage, coverage
 
 DEFAULT_ACCEPT_RATIO = 0.5
 DEFAULT_MAX_SYNTH_PER_RUN = 3
+
+
+def _record_from_product(product: Product, schema_name: str = "product") -> Record:
+    """Adapt a typed product (JSON-LD / platform APIs) into a generic record."""
+    data = {
+        "title": product.title,
+        "price": product.price,
+        "brand": product.brand,
+        "images": product.images,
+        "description": product.description,
+        "sku": product.sku,
+    }
+    return Record(url=product.url, schema_name=schema_name,
+                  data={k: v for k, v in data.items() if v},
+                  source_platform=product.source_platform)
 
 
 class Scrapewright:
@@ -60,8 +81,6 @@ class Scrapewright:
         self._browser = browser
         self._js_enabled = js or browser is not None
         self.accept_ratio = accept_ratio
-        # Hard cap on LLM calls within one batch/crawl run — the model bill is
-        # bounded even if a site resists synthesis on every page.
         self.max_synth_per_run = max_synth_per_run
         self._synth_calls = 0
 
@@ -83,63 +102,77 @@ class Scrapewright:
                 return
             yield product
 
-    # ── Page mode (self-healing + browser escalation) ────────────────────────
-    def scrape_page(self, url: str, *, allow_llm: bool = True) -> Product | None:
-        recipe = self.cache.get(url)
+    # ── Generic extraction (self-healing + browser escalation) ───────────────
+    def extract(self, url: str, schema: Schema = PRODUCT_SCHEMA, *,
+                allow_llm: bool = True) -> Record | None:
+        """Pull ``schema``'s fields off one page."""
+        recipe = self.cache.get(url, schema.name)
 
         # A recipe learned from rendered HTML tells us to skip the static hop.
         if recipe is not None and recipe.needs_js and self._can_js():
             html = self._browser_fetch(url)
             if html is not None:
-                return self._extract_chain(html, url, recipe, allow_llm, js_used=True)
+                return self._extract_chain(html, url, schema, recipe, allow_llm, True)
 
         html = self.fetcher.fetch(url)
 
         # An empty client-side shell can't be extracted from and isn't worth an
         # LLM call — go straight to the browser when one is available.
+        record = None
         if html is not None and not (self._can_js() and looks_js_shelled(html)):
-            product = self._extract_chain(html, url, recipe, allow_llm, js_used=False)
-            if product is not None and product.is_usable():
-                return product
-        else:
-            product = None
+            record = self._extract_chain(html, url, schema, recipe, allow_llm, False)
+            if record is not None and schema.is_satisfied_by(record.data):
+                return record
 
         if not self._can_js():
-            return product
+            return record
 
         rendered = self._browser_fetch(url)
         if rendered is None:
-            return product
-        return self._extract_chain(rendered, url, recipe, allow_llm, js_used=True) or product
+            return record
+        return self._extract_chain(rendered, url, schema, recipe, allow_llm, True) or record
 
-    def _extract_chain(self, html: str, url: str, recipe, allow_llm: bool,
-                       js_used: bool) -> Product | None:
+    def _extract_chain(self, html: str, url: str, schema: Schema, recipe,
+                       allow_llm: bool, js_used: bool) -> Record | None:
         """cached recipe → JSON-LD → LLM synthesis, against one HTML document."""
         if recipe is not None:
-            product = SelectorExtractor(recipe).extract_page(html, url)
-            if product is not None and product.is_usable():
+            record = SelectorExtractor(recipe, schema).extract_record(html, url)
+            if record is not None and schema.is_satisfied_by(record.data):
                 if js_used and not recipe.needs_js:
                     # The recipe only works on rendered HTML — remember that.
                     recipe.needs_js = True
-                    self.cache.put(url, recipe)
-                return product
+                    self.cache.put(url, recipe, schema.name)
+                return record
             # Stale/weak recipe — the site probably changed. Heal below.
 
-        jsonld = JsonLdExtractor().extract_page(html, url)
-        if jsonld is not None and jsonld.is_usable():
-            return jsonld
+        # schema.org markup describes products; it has nothing to say about a
+        # caller-defined schema, so this free hop is product-only.
+        jsonld = None
+        if schema.name == PRODUCT_SCHEMA.name:
+            product = JsonLdExtractor().extract_page(html, url)
+            if product is not None:
+                jsonld = _record_from_product(product, schema.name)
+                if schema.is_satisfied_by(jsonld.data):
+                    return jsonld
 
         if not allow_llm:
             return jsonld  # best effort (may be None or partial)
 
-        new_recipe = self._synthesize(html, url)
+        new_recipe = self._synthesize(html, url, schema)
         if new_recipe is None:
             return jsonld
         new_recipe.needs_js = js_used
-        self.cache.put(url, new_recipe)
-        return SelectorExtractor(new_recipe).extract_page(html, url) or jsonld
+        self.cache.put(url, new_recipe, schema.name)
+        fresh = SelectorExtractor(new_recipe, schema).extract_record(html, url)
+        return fresh or jsonld
 
-    # ── Batch mode (budgeted healing) ────────────────────────────────────────
+    # ── Typed product path ───────────────────────────────────────────────────
+    def scrape_page(self, url: str, *, allow_llm: bool = True) -> Product | None:
+        record = self.extract(url, PRODUCT_SCHEMA, allow_llm=allow_llm)
+        if record is None or not record.data.get("title"):
+            return None
+        return record.to_product()
+
     def scrape_pages(self, urls: Iterable[str], *, allow_llm: bool = True) -> list[Product]:
         """Extract many pages. LLM synthesis (first-time or healing) is capped
         at ``max_synth_per_run`` calls for the whole batch."""
@@ -153,19 +186,16 @@ class Scrapewright:
         return products
 
     # ── Crawl mode ───────────────────────────────────────────────────────────
-    def crawl(self, listing_url: str, *, max_items: int | None = None,
-              allow_llm: bool = True,
-              max_listing_pages: int = 5) -> Iterator[Product]:
-        """Walk a whole store from one listing URL.
-
-        Known platforms short-circuit to catalog mode; custom sites are
-        discovered via the frontier, and the first product page pays the single
-        synthesis cost while every subsequent page replays the cached recipe.
-        """
-        det = detect(listing_url, session=self.session)
-        if det.kind in ("shopify", "woocommerce"):
-            yield from self.scrape_catalog(listing_url, max_items=max_items)
-            return
+    def crawl_records(self, listing_url: str, schema: Schema = PRODUCT_SCHEMA, *,
+                      max_items: int | None = None, allow_llm: bool = True,
+                      max_listing_pages: int = 5) -> Iterator[Record]:
+        """Walk a whole site from one listing URL, pulling ``schema`` per page."""
+        if schema.name == PRODUCT_SCHEMA.name:
+            det = detect(listing_url, session=self.session)
+            if det.kind in ("shopify", "woocommerce"):
+                for product in self.scrape_catalog(listing_url, max_items=max_items):
+                    yield _record_from_product(product, schema.name)
+                return
 
         self._synth_calls = 0
         frontier = Frontier(fetcher=self.fetcher,
@@ -176,10 +206,20 @@ class Scrapewright:
             if max_items is not None and count >= max_items:
                 return
             can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
-            product = self.scrape_page(url, allow_llm=can_llm)
-            if product is not None:
-                yield product
+            record = self.extract(url, schema, allow_llm=can_llm)
+            if record is not None and record.data:
+                yield record
                 count += 1
+
+    def crawl(self, listing_url: str, *, max_items: int | None = None,
+              allow_llm: bool = True,
+              max_listing_pages: int = 5) -> Iterator[Product]:
+        """Product-schema crawl, yielding typed products."""
+        for record in self.crawl_records(listing_url, PRODUCT_SCHEMA,
+                                         max_items=max_items, allow_llm=allow_llm,
+                                         max_listing_pages=max_listing_pages):
+            if record.data.get("title"):
+                yield record.to_product()
 
     # ── internals ────────────────────────────────────────────────────────────
     def _can_js(self) -> bool:
@@ -193,9 +233,9 @@ class Scrapewright:
     def _browser_fetch(self, url: str) -> str | None:
         return self._get_browser().fetch(url)
 
-    def _synthesize(self, html: str, url: str):
+    def _synthesize(self, html: str, url: str, schema: Schema = PRODUCT_SCHEMA):
         self._synth_calls += 1
-        return self.llm.synthesize(html, url)
+        return self.llm.synthesize(html, url, schema)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def close(self) -> None:

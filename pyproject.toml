@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scrapewright"
-version = "0.3.0"
+version = "0.4.0"
 description = "Give it a store URL — it detects the platform and, for custom sites, synthesizes a reusable scraper once via an LLM, then replays it for free."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Fedor Dyatlov" }]
-keywords = ["scraping", "ecommerce", "llm", "agent", "shopify", "woocommerce", "extraction"]
+keywords = ["scraping", "ecommerce", "llm", "agent", "mcp", "shopify", "woocommerce", "extraction"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -28,7 +28,8 @@ dependencies = [
 llm = ["anthropic>=0.40"]
 excel = ["openpyxl>=3.1"]
 js = ["playwright>=1.40"]
-dev = ["pytest>=7.0", "anthropic>=0.40", "openpyxl>=3.1"]
+mcp = ["mcp>=1.0"]
+dev = ["pytest>=7.0", "anthropic>=0.40", "openpyxl>=3.1", "mcp>=1.0"]
 
 [project.scripts]
 scrapewright = "scrapewright.cli:main"

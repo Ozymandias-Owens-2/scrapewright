@@ -18,6 +18,7 @@ import re
 
 from bs4 import BeautifulSoup, Comment
 
+from ..schema import PRODUCT_SCHEMA, Schema
 from .base import SelectorRecipe
 
 # The Anthropic SDK is an optional extra — the deterministic Shopify / Woo /
@@ -25,20 +26,15 @@ from .base import SelectorRecipe
 # hard-requires it.
 DEFAULT_MODEL = "claude-opus-5"
 
-_FIELDS = ("title", "price", "brand", "images", "description", "sku")
+_PROMPT = """You are writing a reusable extractor for one web page.
 
-_PROMPT = """You are writing a reusable extractor for one e-commerce product page.
-
-Given the HTML of a single product page, return CSS selectors that locate each
-field. Return ONLY a JSON object, no prose, with this exact shape:
+Given the HTML of a single page, return CSS selectors that locate each field.
+Return ONLY a JSON object, no prose, with this exact shape:
 
 {{
-  "title":       "<css selector or null>",
-  "price":       "<css selector or null>",
-  "brand":       "<css selector or null>",
-  "images":      "<css selector matching <img> or <source> tags or null>",
-  "description": "<css selector or null>",
-  "sku":         "<css selector or null>",
+  "fields": {{
+{field_lines}
+  }},
   "modes": {{
      "<field>": "text" | "attr:<name>"
   }}
@@ -50,10 +46,10 @@ Rules:
 - For a field whose value lives in an attribute (e.g. a meta tag's content, or
   an image's src), set its mode to "attr:<name>" — otherwise omit it (defaults
   to "text").
-- "images" should match the gallery <img> elements; its mode is usually
-  "attr:src".
-- Search the WHOLE document for the price before giving up on it — on many
-  sites it sits far below the title, in a buy box, sticky bar, or configurator
+- For a field marked as matching every element, give a selector that matches
+  all of them; its mode is usually "attr:src".
+- Search the WHOLE document before giving up on a field — on many sites the
+  value sits far below the title, in a buy box, sticky bar, or configurator
   near the end of the markup.
 - Use null for any field the page does not expose.
 
@@ -98,10 +94,12 @@ def reduce_html(html: str, cap: int = DEFAULT_HTML_CAP) -> str:
     return text[:cap]
 
 
-def recipe_from_text(text: str, origin: str = "") -> SelectorRecipe | None:
+def recipe_from_text(text: str, origin: str = "",
+                     schema_name: str = "product") -> SelectorRecipe | None:
     """Parse a model's reply into a :class:`SelectorRecipe`. Pure — no network.
 
-    Tolerates the reply being wrapped in ``` fences or surrounded by stray prose.
+    Tolerates ``` fences, stray prose, and either reply shape: the nested
+    ``{"fields": {...}, "modes": {...}}`` form or a flat map of field->selector.
     """
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
@@ -111,14 +109,18 @@ def recipe_from_text(text: str, origin: str = "") -> SelectorRecipe | None:
     except json.JSONDecodeError:
         return None
 
-    fields = {f: (data.get(f) or None) for f in _FIELDS}
-    modes = data.get("modes") or {}
-    if not isinstance(modes, dict):
-        modes = {}
-    if not any(fields.values()):
+    modes = data.get("modes") if isinstance(data.get("modes"), dict) else {}
+    raw_fields = data.get("fields")
+    if not isinstance(raw_fields, dict):
+        raw_fields = {k: v for k, v in data.items() if k != "modes"}
+
+    fields = {str(k): str(v) for k, v in raw_fields.items()
+              if v and isinstance(v, str)}
+    if not fields:
         return None
-    return SelectorRecipe(**fields, modes={str(k): str(v) for k, v in modes.items()},
-                          origin=origin)
+    return SelectorRecipe(fields=fields,
+                          modes={str(k): str(v) for k, v in modes.items()},
+                          schema_name=schema_name, origin=origin)
 
 
 class LlmExtractor:
@@ -144,9 +146,11 @@ class LlmExtractor:
         self._client = anthropic.Anthropic(api_key=self._api_key)
         return self._client
 
-    def synthesize(self, html: str, url: str) -> SelectorRecipe | None:
+    def synthesize(self, html: str, url: str,
+                   schema: Schema = PRODUCT_SCHEMA) -> SelectorRecipe | None:
         """Ask Claude for a recipe covering this page. One call per site."""
-        prompt = _PROMPT.format(html=reduce_html(html, cap=self.html_cap))
+        prompt = _PROMPT.format(field_lines=schema.prompt_lines(),
+                                html=reduce_html(html, cap=self.html_cap))
         client = self._get_client()
         msg = client.messages.create(
             model=self.model,
@@ -154,4 +158,5 @@ class LlmExtractor:
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-        return recipe_from_text(text, origin=f"llm:{self.model}")
+        return recipe_from_text(text, origin=f"llm:{self.model}",
+                                schema_name=schema.name)

@@ -15,11 +15,12 @@ from .cache import RecipeCache
 from .crawl import Frontier
 from .detect import Detection, detect
 from .fetch import BrowserFetcher, StaticFetcher
-from .models import Product, parse_price
+from .models import Product, Record, parse_price
 from .pipeline import Scrapewright, check
+from .schema import PRODUCT_SCHEMA, Field, Schema
 from .validate import Coverage, coverage
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "Scrapewright",
@@ -27,6 +28,10 @@ __all__ = [
     "StaticFetcher",
     "BrowserFetcher",
     "Product",
+    "Record",
+    "Schema",
+    "Field",
+    "PRODUCT_SCHEMA",
     "Detection",
     "detect",
     "check",

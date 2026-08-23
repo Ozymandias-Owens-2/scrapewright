@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/scrapewright)](https://pypi.org/project/scrapewright/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**Give it a store URL. It writes the scraper.**
+**Give it a URL. It writes the scraper.**
 
 Most e-commerce catalog scraping splits into two worlds: sites on a known
 platform (Shopify, WooCommerce) that expose a clean JSON feed, and everything
@@ -49,7 +49,8 @@ cares which path a record came from.
 ```bash
 pip install scrapewright               # deterministic paths (Shopify, Woo, JSON-LD)
 pip install "scrapewright[llm]"        # + LLM recipe synthesis for custom HTML
-pip install "scrapewright[llm,js,excel]" && playwright install chromium   # + JS rendering, XLSX
+pip install "scrapewright[llm,js,excel,mcp]"   # + JS rendering, XLSX, MCP server
+playwright install chromium                    # only needed for --js
 ```
 
 ## Use it
@@ -90,6 +91,46 @@ scrapewright list                                     # cached recipe domains
 
 `-o` writes `.csv` (Excel-ready, UTF-8 BOM), `.xlsx` (`pip install scrapewright[excel]`),
 or `.jsonl`; without it, products stream to stdout as JSONL.
+
+### Bring your own schema
+
+Products are just the built-in default. Declare the fields you want and the same
+compile-once/replay-free loop works on any structured page — job posts, listings,
+registry records:
+
+```bash
+scrapewright run https://jobs.example.com/p/123 -f title -f company -f salary:number -f tags:list --schema-name job
+```
+
+```python
+from scrapewright import Scrapewright, Schema
+
+job = Schema.from_names(["title", "company", "salary:number", "tags:list"], name="job")
+record = Scrapewright().extract("https://jobs.example.com/p/123", job)
+print(record.data)   # {'title': ..., 'company': ..., 'salary': ..., 'tags': [...]}
+```
+
+Field kinds are `text` (default), `number`, `url`, and `list`. Recipes are cached
+per site *and* per schema, so one domain can be compiled against several field
+sets without them overwriting each other.
+
+### Use it from an AI agent (MCP)
+
+scrapewright ships an [MCP](https://modelcontextprotocol.io) server, so an agent can
+call it as a tool instead of reading raw HTML itself:
+
+```bash
+pip install "scrapewright[mcp,llm]"
+scrapewright mcp
+```
+
+Point any MCP client at that command and the agent gains five tools: `detect_site`,
+`scrape_catalog`, `extract_page`, `crawl_site`, and `list_learned_sites`.
+
+The economics are the point. An agent that reads pages itself pays model tokens per
+page, forever. These tools pay **once per site** — an agent crawling 500 pages spends
+one synthesis, not five hundred, and platform stores (Shopify, WooCommerce) cost
+nothing at all.
 
 ### Client-side-rendered stores
 
@@ -136,6 +177,8 @@ the number a recipe is trusted on before it's cached.
 | `extract/jsonld` | schema.org/Product from `<script type="application/ld+json">` — free, ~common |
 | `extract/llm` | Synthesizes a `SelectorRecipe` from HTML — the one-time compile step |
 | `extract/selectors` | Replays a recipe with BeautifulSoup — the deterministic runtime |
+| `schema` | `Schema`/`Field` — declare what to extract; `PRODUCT_SCHEMA` is the built-in default |
+| `mcp_server` | Five MCP tools so AI agents can call scrapewright directly |
 | `fetch` | `StaticFetcher` (plain HTTP) and `BrowserFetcher` (headless Chromium), plus the shell heuristic that decides when a render is worth paying for |
 | `crawl` | Frontier: turns one listing URL into product URLs (pattern match + card-template fallback + pagination) — deterministic, no LLM |
 | `cache` | Persists recipes keyed by domain, so the compile happens once |
@@ -170,19 +213,19 @@ pytest
 
 ## Status
 
-v0.3 (alpha). Implemented and tested: catalog extraction (Shopify, WooCommerce),
+v0.4 (alpha). Implemented and tested: catalog extraction (Shopify, WooCommerce),
 page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
-**self-healing re-synthesis** with a bounded per-run model budget, a
-**crawl frontier** (one listing URL → the whole store), **JS rendering via an
-optional Playwright fetcher** with automatic escalation, coverage validation, and
-CSV / XLSX / JSONL export. 42 offline tests.
+**self-healing re-synthesis** with a bounded per-run model budget, a **crawl
+frontier** (one listing URL → the whole site), **JS rendering** via an optional
+Playwright fetcher with automatic escalation, **schema-agnostic extraction**
+(bring your own fields), an **MCP server** for AI agents, coverage validation,
+and CSV / XLSX / JSONL export. 58 offline tests.
 
-Known limits, stated plainly: it does not defeat anti-bot walls (deliberately out
-of scope), and the schema is products-only for now.
+Known limit, stated plainly: it does not defeat anti-bot walls — deliberately
+out of scope. Sites behind Akamai/Fastly-style challenges return an honest miss.
 
-Roadmap: schema-agnostic extraction (bring your own field schema — the same
-compile-once/replay-free loop for any structured site, not just product pages),
-and BigCommerce / Salesforce Commerce detectors.
+Roadmap: BigCommerce / Salesforce Commerce detectors, and pagination strategies
+for infinite-scroll listings.
 
 ## License
 
