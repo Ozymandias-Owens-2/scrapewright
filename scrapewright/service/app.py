@@ -28,11 +28,15 @@ from ..schema import PRODUCT_SCHEMA, Schema
 from .billing import BillingProvider, NoopBilling
 from .jobs import JobRegistry
 from .metering import metered_scrapewright
-from .plans import get_plan
-from .pricing import bill_for
-from .store import ApiKey, Store
+from .credits import FREE_MONTHLY_CREDITS, credits_for, describe_costs
+from .plans import get_tier
+from .pricing import value_of
+from .store import ApiKey, Store, Usage
 
-MAX_ITEMS_HARD_CAP = 1000
+# An absolute rail, deliberately above every tier: a tier limit that can never
+# take effect is a lie in a config file. This one only catches a caller asking
+# for something no tier allows.
+MAX_ITEMS_HARD_CAP = 100_000
 
 
 # ── request/response models ──────────────────────────────────────────────────
@@ -91,16 +95,39 @@ def create_app(store: Store | None = None,
         store.record(key.id, requests=1)
         return key
 
-    def enforce_quota(key: ApiKey) -> None:
-        plan = get_plan(billing.plan_for(key))
-        breach = plan.exceeded(store.usage_for_month(key.id),
-                               store.usage_for_day(key.id))
+    def available_credits(key: ApiKey) -> int:
+        """Balance, after making sure this month's free allowance was granted."""
+        store.ensure_free_allowance(key.id, FREE_MONTHLY_CREDITS)
+        return store.balance(key.id)
+
+    def enforce_quota(key: ApiKey) -> int:
+        """Refuse before any work happens. Returns the credits available."""
+        tier = get_tier(billing.plan_for(key))
+        if not tier.metered:
+            return 10**9   # self-hosted: metered for visibility, never refused
+
+        breach = tier.daily_synthesis_limit_hit(store.usage_for_day(key.id).syntheses)
         if breach:
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, breach)
 
-    def charge(key: ApiKey, usage: dict[str, int]) -> None:
+        balance = available_credits(key)
+        if balance <= 0:
+            raise HTTPException(
+                status.HTTP_402_PAYMENT_REQUIRED,
+                f"out of credits (balance {balance}). Top up to continue; the "
+                f"free allowance of {FREE_MONTHLY_CREDITS:,} credits resets monthly.")
+        return balance
+
+    def charge(key: ApiKey, usage: dict[str, int], reason: str) -> int:
+        """Record consumption and deduct its credits. Returns credits spent."""
         store.record(key.id, **usage)
+        countable = {k: v for k, v in usage.items()
+                     if k in Usage.__dataclass_fields__}
+        spent = credits_for(Usage(**countable))
+        if spent and get_tier(billing.plan_for(key)).metered:
+            store.spend(key.id, spent, reason)
         billing.report_usage(key, usage)
+        return spent
 
     # ── endpoints ────────────────────────────────────────────────────────────
     @app.get("/health")
@@ -112,7 +139,9 @@ def create_app(store: Store | None = None,
                         key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """What platform is this, and which strategy fits? One cheap request."""
         det = detect(req.url)
-        charge(key, {"pages": 1})
+        # Routing advice costs no credits: charging for the question would push
+        # callers into guessing, which is worse for both of us.
+        store.record(key.id, pages=1)
         return {"base": det.base, "platform": det.kind, "strategy": det.strategy,
                 "catalog_endpoint": det.catalog_endpoint,
                 "free": det.has_catalog_api, "use_js": det.likely_needs_js,
@@ -124,12 +153,6 @@ def create_app(store: Store | None = None,
                          key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """One page in, one structured record out."""
         enforce_quota(key)
-        plan = get_plan(billing.plan_for(key))
-        if req.js and not plan.js_allowed:
-            raise HTTPException(status.HTTP_403_FORBIDDEN,
-                                f"browser rendering is not available on the "
-                                f"'{plan.name}' plan")
-
         schema = _schema_for(req.fields)
         sw, meter = metered_scrapewright(js=req.js)
         record = None
@@ -138,8 +161,10 @@ def create_app(store: Store | None = None,
         finally:
             sw.close()
             # Charge for what was delivered, not for the attempt: a page that
-            # yields nothing costs the customer no records.
-            charge(key, {**meter.as_dict(), "records": 1 if record else 0})
+            # yields nothing costs no record credits. A render or synthesis it
+            # did consume is still charged -- that work really happened.
+            spent = charge(key, {**meter.as_dict(), "records": 1 if record else 0},
+                           f"extract {req.url}")
 
         if record is None:
             raise HTTPException(
@@ -148,15 +173,20 @@ def create_app(store: Store | None = None,
         payload = _record_payload(record)
         payload["complete"] = schema.is_satisfied_by(record.data)
         payload["usage"] = meter.as_dict()
+        payload["credits_spent"] = spent
+        payload["credits_left"] = store.balance(key.id)
         return payload
 
     @app.post("/v1/crawl", status_code=status.HTTP_202_ACCEPTED)
     def crawl_endpoint(req: CrawlRequest,
                        key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """Walk a whole site. Returns a job id — crawls outlive a request."""
-        enforce_quota(key)
-        plan = get_plan(billing.plan_for(key))
-        max_items = min(req.max_items, plan.max_items_per_job, MAX_ITEMS_HARD_CAP)
+        balance = enforce_quota(key)
+        tier = get_tier(billing.plan_for(key))
+        # A record costs one credit, so the balance is itself an item cap: the
+        # job stops at what the caller can pay for instead of overdrawing.
+        max_items = min(req.max_items, tier.max_items_per_job,
+                        MAX_ITEMS_HARD_CAP, balance)
         schema = _schema_for(req.fields)
 
         def work() -> tuple[Any, dict[str, int]]:
@@ -170,13 +200,13 @@ def create_app(store: Store | None = None,
                 # JSON requests, so fetch counts describe our effort, not the
                 # customer's benefit. `records` is the meter quotas run on.
                 usage = {**meter.as_dict(), "records": len(records)}
-                charge(key, usage)
+                usage["credits_spent"] = charge(key, usage, f"crawl {req.url}")
             return ({"count": len(records),
                      "records": [_record_payload(r) for r in records]}, usage)
 
         job = jobs.submit(key.id, "crawl", work)
         return {**job.as_dict(), "max_items": max_items,
-                "poll": f"/v1/jobs/{job.id}"}
+                "credits_available": balance, "poll": f"/v1/jobs/{job.id}"}
 
     @app.get("/v1/jobs/{job_id}")
     def job_endpoint(job_id: str,
@@ -193,20 +223,22 @@ def create_app(store: Store | None = None,
 
     @app.get("/v1/usage")
     def usage_endpoint(key: ApiKey = Depends(require_key)) -> dict[str, Any]:
-        plan = get_plan(billing.plan_for(key))
+        tier = get_tier(billing.plan_for(key))
         month = store.usage_for_month(key.id)
         today = store.usage_for_day(key.id)
+        balance = available_credits(key)
         return {
             "key_id": key.id,
-            "plan": plan.name,
+            "tier": tier.name,
+            "credits": {"balance": balance,
+                        "approx_usd_value": value_of(balance),
+                        "free_monthly_allowance": FREE_MONTHLY_CREDITS,
+                        "cost_per_unit": describe_costs()},
             "month": month.as_dict(),
             "today": today.as_dict(),
-            "limits": {"monthly_records": plan.monthly_records,
-                       "monthly_syntheses": plan.monthly_syntheses,
-                       "daily_syntheses": plan.daily_syntheses,
-                       "monthly_renders": plan.monthly_renders,
-                       "max_items_per_job": plan.max_items_per_job},
-            "bill": bill_for(plan, month),
+            "limits": {"daily_syntheses": tier.daily_syntheses,
+                       "max_items_per_job": tier.max_items_per_job},
+            "recent_ledger": store.ledger(key.id, limit=10),
             # The product's own argument, made visible: records climb while
             # sites_compiled stays flat, because each site is compiled once.
             "records_delivered": month.records,

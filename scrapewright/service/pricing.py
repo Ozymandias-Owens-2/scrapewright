@@ -59,48 +59,39 @@ def operator_cost(usage: Usage, costs: UnitCosts = COSTS) -> float:
     return costs.of(usage)
 
 
-def worst_case_plan_cost(plan, costs: UnitCosts = COSTS) -> float:
-    """Cost of a customer who consumes an entire plan's caps in a month.
+def pack_margin(pack, costs: UnitCosts = COSTS) -> dict[str, float]:
+    """A pack's price against the one action that costs us anything.
 
-    The number a price has to beat. Run it whenever a cap changes — a quota
-    edit is a margin edit, and this is the line that says so out loud.
+    Compiling a site is the binding constraint: if a pack clears margin there,
+    it clears everywhere, because delivering records is free. Run this whenever
+    a pack price or a credit cost changes -- both are margin edits.
     """
-    return costs.of(Usage(syntheses=plan.monthly_syntheses,
-                          renders=plan.monthly_renders,
-                          records=plan.monthly_records,
-                          pages=plan.monthly_records))
+    from .credits import CREDITS_PER_SYNTHESIS
 
-
-def plan_margin(plan, costs: UnitCosts = COSTS) -> dict[str, float]:
-    """Price, worst-case cost, and the margin between them."""
-    cost = worst_case_plan_cost(plan, costs)
-    price = plan.price_usd_month
+    revenue_per_site = CREDITS_PER_SYNTHESIS * pack.usd_per_credit
     return {
-        "price_usd": price,
-        "worst_case_cost_usd": cost,
-        "worst_case_margin_usd": round(price - cost, 2),
-        "worst_case_margin_pct": round(100 * (price - cost) / price, 1) if price else 0.0,
+        "pack": pack.name,
+        "credits": pack.credits,
+        "price_usd": pack.price_usd,
+        "usd_per_credit": round(pack.usd_per_credit, 5),
+        "revenue_per_new_site_usd": round(revenue_per_site, 4),
+        "cost_per_new_site_usd": costs.synthesis_usd,
+        "margin_pct": round(100 * (revenue_per_site - costs.synthesis_usd)
+                            / revenue_per_site, 1),
     }
 
 
-def bill_for(plan, usage: Usage) -> dict[str, float | int]:
-    """What the customer owes for this month: subscription plus any overage."""
-    over_records = max(0, usage.records - plan.monthly_records)
-    over_sites = max(0, usage.syntheses - plan.monthly_syntheses)
+def free_allowance_worst_case(costs: UnitCosts = COSTS) -> float:
+    """What a free account can cost us at most in a month: every free credit
+    spent on the most expensive action there is."""
+    from .credits import CREDITS_PER_SYNTHESIS, FREE_MONTHLY_CREDITS
 
-    record_overage = 0.0
-    site_overage = 0.0
-    if plan.overage_per_1k_records is not None:
-        record_overage = round(over_records / 1000 * plan.overage_per_1k_records, 2)
-    if plan.overage_per_site is not None:
-        site_overage = round(over_sites * plan.overage_per_site, 2)
+    return round(FREE_MONTHLY_CREDITS / CREDITS_PER_SYNTHESIS * costs.synthesis_usd, 2)
 
-    return {
-        "plan": plan.name,
-        "subscription_usd": plan.price_usd_month,
-        "records_over_quota": over_records,
-        "records_overage_usd": record_overage,
-        "sites_over_quota": over_sites,
-        "sites_overage_usd": site_overage,
-        "total_usd": round(plan.price_usd_month + record_overage + site_overage, 2),
-    }
+
+def value_of(credits: int, pack_name: str = "starter") -> float:
+    """Dollar value of a credit balance, at a given pack's rate."""
+    from .credits import PACKS_BY_NAME
+
+    pack = PACKS_BY_NAME.get(pack_name) or next(iter(PACKS_BY_NAME.values()))
+    return round(credits * pack.usd_per_credit, 2)

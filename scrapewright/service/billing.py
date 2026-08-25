@@ -9,10 +9,11 @@ entitlement (plans), and honest consumption data (meters).
 To connect a provider, implement :class:`BillingProvider` and hand it to the
 app. Two integration shapes cover essentially everything:
 
-* **Subscription / entitlement** — the provider tells you which plan a customer
-  is on; you call :meth:`plan_for` on each request and let quotas do the rest.
-* **Usage-based** — you push metered consumption with :meth:`report_usage`
-  after each job and the provider invoices it.
+* **Top-ups** — a completed payment becomes a credit grant. The provider's
+  webhook handler calls ``store.grant(key_id, pack.credits, ...)`` with the
+  payment id as the idempotency key, so a replayed webhook cannot double-credit.
+* **Reporting** — push consumption with :meth:`report_usage` if the provider
+  wants usage data; a no-op is fine, since the ledger is already the record.
 
 The default :class:`NoopBilling` runs the service free-of-charge, which is the
 right behavior for a demo, a self-hosted deployment, or a launch before
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .plans import DEFAULT_PLAN
+from .plans import DEFAULT_TIER
 from .store import ApiKey
 
 
@@ -31,7 +32,7 @@ class BillingProvider(Protocol):
     """What the service needs from a payment provider — the whole contract."""
 
     def plan_for(self, key: ApiKey) -> str:
-        """The plan name this key is entitled to right now."""
+        """The tier this key runs under — 'metered' or 'unlimited'."""
         ...
 
     def report_usage(self, key: ApiKey, usage: dict[str, int]) -> None:
@@ -40,10 +41,10 @@ class BillingProvider(Protocol):
 
 
 class NoopBilling:
-    """Charges nothing; honors whatever plan the key was issued with."""
+    """Sells nothing; credits arrive only by an operator grant."""
 
     def plan_for(self, key: ApiKey) -> str:
-        return key.plan or DEFAULT_PLAN
+        return key.plan or DEFAULT_TIER
 
     def report_usage(self, key: ApiKey, usage: dict[str, int]) -> None:
         return None

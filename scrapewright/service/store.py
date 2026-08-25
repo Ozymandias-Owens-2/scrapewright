@@ -37,6 +37,17 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at  TEXT NOT NULL,
     revoked_at  TEXT
 );
+CREATE TABLE IF NOT EXISTS credit_ledger (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_id      TEXT NOT NULL,
+    delta       INTEGER NOT NULL,
+    reason      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    -- Lets a grant be replayed safely: the monthly free allowance is handed
+    -- out lazily on first use, and must not stack if that happens twice.
+    idempotency_key TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS credit_ledger_key ON credit_ledger (key_id);
 CREATE TABLE IF NOT EXISTS usage (
     key_id      TEXT NOT NULL,
     day         TEXT NOT NULL,
@@ -163,7 +174,6 @@ class Store:
                        created_at=r["created_at"], revoked_at=r["revoked_at"])
                 for r in rows]
 
-    # ── usage ────────────────────────────────────────────────────────────────
     def record(self, key_id: str, *, requests: int = 0, pages: int = 0,
                renders: int = 0, syntheses: int = 0, records: int = 0,
                day: str | None = None) -> None:
@@ -182,6 +192,63 @@ class Store:
                 (key_id, day, requests, pages, renders, syntheses, records),
             )
 
+    # ── credits ──────────────────────────────────────────────────────────────
+    def balance(self, key_id: str) -> int:
+        """Credits available now: grants minus spending, as a running sum.
+
+        A ledger rather than a counter, so every movement stays auditable and
+        a disputed bill can be reconstructed line by line.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(delta), 0) AS bal FROM credit_ledger "
+                "WHERE key_id = ?", (key_id,)
+            ).fetchone()
+        return int(row["bal"])
+
+    def grant(self, key_id: str, amount: int, reason: str,
+              idempotency_key: str | None = None) -> bool:
+        """Add credits. Returns False if this exact grant was already applied."""
+        if amount <= 0:
+            raise ValueError("grant amount must be positive")
+        try:
+            with self._conn() as conn:
+                conn.execute(
+                    "INSERT INTO credit_ledger (key_id, delta, reason, created_at, "
+                    "idempotency_key) VALUES (?, ?, ?, ?, ?)",
+                    (key_id, amount, reason, _now(), idempotency_key),
+                )
+        except sqlite3.IntegrityError:
+            return False   # replayed grant; balance already reflects it
+        return True
+
+    def spend(self, key_id: str, amount: int, reason: str) -> None:
+        """Deduct credits. Recorded even if it takes the balance negative:
+        work already done is charged for, and the next request is refused."""
+        if amount <= 0:
+            return
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO credit_ledger (key_id, delta, reason, created_at) "
+                "VALUES (?, ?, ?, ?)", (key_id, -amount, reason, _now()),
+            )
+
+    def ensure_free_allowance(self, key_id: str, amount: int,
+                              month: str | None = None) -> None:
+        """Hand out this month's free credits, once."""
+        month = month or date.today().strftime("%Y-%m")
+        self.grant(key_id, amount, f"free allowance {month}",
+                   idempotency_key=f"free:{key_id}:{month}")
+
+    def ledger(self, key_id: str, limit: int = 50) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT delta, reason, created_at FROM credit_ledger "
+                "WHERE key_id = ? ORDER BY id DESC LIMIT ?", (key_id, limit)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── usage ────────────────────────────────────────────────────────────────
     def usage_for_day(self, key_id: str, day: str | None = None) -> Usage:
         day = day or date.today().isoformat()
         with self._conn() as conn:

@@ -168,27 +168,73 @@ def cmd_keys(args) -> int:
 
 
 def cmd_plans(args) -> int:
-    """Show the pricing model against the cost its own caps allow."""
-    from .service.plans import PLANS
-    from .service.pricing import plan_margin
+    """Show the credit model against the cost it has to cover."""
+    from .service.credits import FREE_MONTHLY_CREDITS, PACKS, describe_costs
+    from .service.pricing import free_allowance_worst_case, pack_margin
 
-    head = (f"{'plan':<11}{'price':>8}{'records/mo':>12}{'new sites':>11}"
-            f"{'renders':>10}{'worst cost':>12}{'margin':>9}")
+    costs = describe_costs()
+    print("What a job costs, in credits:")
+    print(f"  1 record delivered   {costs['record']:>4} credit")
+    print(f"  1 browser render     {costs['render']:>4} credits")
+    print(f"  1 new site compiled  {costs['new_site']:>4} credits")
+    print("  page fetches         free (covered by the record they produce)")
+    print("  detect / routing     free")
+    print()
+
+    head = f"{'pack':<10}{'credits':>10}{'price':>8}{'$/credit':>11}{'margin':>9}"
     print(head)
     print("-" * len(head))
-    for plan in PLANS.values():
-        m = plan_margin(plan)
-        price = f"${plan.price_usd_month}" if plan.price_usd_month else "free"
-        records = "unlimited" if plan.monthly_records >= 10**9 else f"{plan.monthly_records:,}"
-        sites = "unlimited" if plan.monthly_syntheses >= 10**9 else str(plan.monthly_syntheses)
-        renders = "unlimited" if plan.monthly_renders >= 10**9 else f"{plan.monthly_renders:,}"
-        cost = "-" if plan.monthly_records >= 10**9 else f"${m['worst_case_cost_usd']:.2f}"
-        margin = f"{m['worst_case_margin_pct']:.0f}%" if plan.price_usd_month else "-"
-        print(f"{plan.name:<11}{price:>8}{records:>12}{sites:>11}{renders:>10}"
-              f"{cost:>12}{margin:>9}")
+    for pack in PACKS:
+        m = pack_margin(pack)
+        print(f"{pack.name:<10}{pack.credits:>10,}{'$' + str(pack.price_usd):>8}"
+              f"{m['usd_per_credit']:>11.5f}{str(m['margin_pct']) + '%':>9}")
     print()
-    print("Worst cost = a customer who consumes the entire plan every month.")
-    print("Records are what customers buy; new sites and renders are what cost us.")
+    print(f"Free: {FREE_MONTHLY_CREDITS:,} credits a month, resetting. Worst case "
+          f"that costs us ${free_allowance_worst_case():.2f} per account.")
+    print("Margin is measured on compiling a new site -- the only step that "
+          "costs real money.")
+    return 0
+
+
+def cmd_credits(args) -> int:
+    """Grant credits or read a balance."""
+    from .service.credits import FREE_MONTHLY_CREDITS, PACKS_BY_NAME
+    from .service.pricing import value_of
+    from .service.store import Store
+
+    store = Store(args.db)
+    if args.action == "grant":
+        amount = args.amount
+        reason = args.reason or "manual grant"
+        if args.pack:
+            pack = PACKS_BY_NAME.get(args.pack)
+            if pack is None:
+                print(f"unknown pack {args.pack!r}; try: "
+                      f"{', '.join(PACKS_BY_NAME)}", file=sys.stderr)
+                return 1
+            amount, reason = pack.credits, f"pack: {pack.name} (${pack.price_usd})"
+        if not amount:
+            print("give --amount N or --pack NAME", file=sys.stderr)
+            return 1
+        applied = store.grant(args.key_id, amount, reason,
+                              idempotency_key=args.idempotency)
+        if applied:
+            print(f"granted {amount:,} credits to {args.key_id} ({reason})")
+        else:
+            # The idempotency key was already used -- almost always a replayed
+            # payment webhook. Say so instead of claiming a grant that did not
+            # happen; the balance below is the truth either way.
+            print(f"already applied: {args.idempotency!r} was granted before, "
+                  f"nothing added")
+        print(f"balance now {store.balance(args.key_id):,}")
+    elif args.action == "balance":
+        balance = store.balance(args.key_id)
+        print(f"{args.key_id}: {balance:,} credits (~${value_of(balance):.2f})")
+        print(f"free allowance: {FREE_MONTHLY_CREDITS:,} credits/month")
+        for entry in store.ledger(args.key_id, limit=args.limit):
+            sign = "+" if entry["delta"] > 0 else ""
+            print(f"  {entry['created_at']}  {sign}{entry['delta']:>8,}  "
+                  f"{entry['reason']}")
     return 0
 
 
@@ -256,12 +302,27 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("action", choices=["create", "list", "revoke"])
     k.add_argument("key_id", nargs="?", default=None, help="for: revoke")
     k.add_argument("--label", default=None)
-    k.add_argument("--plan", default="free", choices=["free", "pro", "unlimited"])
+    k.add_argument("--plan", default="metered",
+                   choices=["metered", "unlimited"],
+                   help="metered keys spend credits; unlimited is for self-hosting")
     k.add_argument("--db", default="scrapewright_service.db")
     k.set_defaults(func=cmd_keys)
 
-    pl = sub.add_parser("plans", help="Show the pricing model and its margins")
+    pl = sub.add_parser("plans", help="Show the credit model and its margins")
     pl.set_defaults(func=cmd_plans)
+
+    cr = sub.add_parser("credits", help="Grant credits or read a balance")
+    cr.add_argument("action", choices=["grant", "balance"])
+    cr.add_argument("key_id")
+    cr.add_argument("--amount", type=int, default=0, help="credits to grant")
+    cr.add_argument("--pack", default=None,
+                    help="grant a whole pack: starter | growth | scale")
+    cr.add_argument("--reason", default=None)
+    cr.add_argument("--idempotency", default=None,
+                    help="payment id, so a replayed webhook cannot double-credit")
+    cr.add_argument("--limit", type=int, default=10, help="ledger lines to show")
+    cr.add_argument("--db", default="scrapewright_service.db")
+    cr.set_defaults(func=cmd_credits)
 
     m = sub.add_parser("mcp", help="Run as an MCP server for AI agents")
     m.add_argument("--transport", default="stdio",

@@ -8,12 +8,14 @@ Install with ``pip install "scrapewright[service]"`` and run
 from .billing import BillingProvider, NoopBilling
 from .jobs import JobRegistry
 from .metering import Meter, metered_scrapewright
-from .plans import PLANS, Plan, get_plan
+from .credits import PACKS, CreditPack, credits_for
+from .plans import TIERS, Tier, get_tier
 from .store import ApiKey, Store, Usage
 
 __all__ = [
     "ApiKey", "Store", "Usage",
-    "Plan", "PLANS", "get_plan",
+    "Tier", "TIERS", "get_tier",
+    "CreditPack", "PACKS", "credits_for",
     "Meter", "metered_scrapewright",
     "JobRegistry",
     "BillingProvider", "NoopBilling",

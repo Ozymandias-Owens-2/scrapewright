@@ -15,7 +15,11 @@ from scrapewright.models import Record  # noqa: E402
 from scrapewright.service import metering  # noqa: E402
 from scrapewright.service.app import create_app  # noqa: E402
 from scrapewright.service.jobs import JobRegistry  # noqa: E402
-from scrapewright.service.plans import get_plan  # noqa: E402
+from scrapewright.service.credits import (  # noqa: E402
+    CREDITS_PER_SYNTHESIS,
+    FREE_MONTHLY_CREDITS,
+)
+from scrapewright.service.plans import get_tier  # noqa: E402
 from scrapewright.service.store import Store, hash_key  # noqa: E402
 
 
@@ -63,7 +67,7 @@ def stub_core(monkeypatch):
 @pytest.fixture
 def client(tmp_path, stub_core):
     store = Store(tmp_path / "svc.db")
-    raw, key = store.create_key(label="test", plan="free")
+    raw, key = store.create_key(label="test", plan="metered")
     app = create_app(store=store, jobs=JobRegistry(max_workers=1))
     with TestClient(app) as c:
         c.headers.update({"X-API-Key": raw})
@@ -147,22 +151,23 @@ def test_pipeline_is_always_closed(client, stub_core):
 
 
 # ── quotas ───────────────────────────────────────────────────────────────────
-def test_quota_refusal_happens_before_any_work(client, stub_core):
+def test_running_out_of_credits_refuses_before_any_work(client, stub_core):
     c, store, key, _ = client
-    plan = get_plan("free")
-    store.record(key.id, records=plan.monthly_records)
+    # Drain the free allowance the first request would have granted.
+    store.ensure_free_allowance(key.id, FREE_MONTHLY_CREDITS)
+    store.spend(key.id, FREE_MONTHLY_CREDITS, "earlier jobs")
 
     built_before = len(stub_core["built"])
     r = c.post("/v1/extract", json={"url": "https://x/1"})
-    assert r.status_code == 429
-    assert "record quota" in r.json()["detail"]
+    assert r.status_code == 402                      # payment required
+    assert "out of credits" in r.json()["detail"]
     # Refused means not charged: no pipeline was ever constructed.
     assert len(stub_core["built"]) == built_before
 
 
 def test_daily_synthesis_quota_message_mentions_compiled_sites(client):
     c, store, key, _ = client
-    store.record(key.id, syntheses=get_plan("free").daily_syntheses)
+    store.record(key.id, syntheses=get_tier("metered").daily_syntheses)
     r = c.post("/v1/extract", json={"url": "https://x/1"})
     assert r.status_code == 429
     assert "already compiled still work" in r.json()["detail"]
@@ -189,10 +194,21 @@ def test_crawl_returns_a_job_then_completes(client, stub_core):
     assert got["usage"]["pages"] == 3
 
 
-def test_crawl_max_items_is_capped_by_the_plan(client):
+def test_crawl_is_capped_by_the_credits_on_hand(client):
+    """A record costs one credit, so a caller cannot start a job bigger than
+    their balance -- the cap replaces an overdraft."""
     c, *_ = client
     r = c.post("/v1/crawl", json={"url": "https://x/shop", "max_items": 100_000})
-    assert r.json()["max_items"] == get_plan("free").max_items_per_job
+    body = r.json()
+    assert body["max_items"] == FREE_MONTHLY_CREDITS
+    assert body["credits_available"] == FREE_MONTHLY_CREDITS
+
+
+def test_crawl_is_also_capped_by_the_tier(client):
+    c, store, key, _ = client
+    store.grant(key.id, 500_000, "big top-up")
+    r = c.post("/v1/crawl", json={"url": "https://x/shop", "max_items": 100_000})
+    assert r.json()["max_items"] == get_tier("metered").max_items_per_job
 
 
 def test_a_job_id_is_not_a_capability(client, tmp_path):
@@ -223,16 +239,19 @@ def test_failed_job_is_reported_not_raised(client, monkeypatch):
 
 
 # ── usage reporting ──────────────────────────────────────────────────────────
-def test_usage_endpoint_reports_plan_and_counters(client):
+def test_usage_endpoint_reports_the_balance_and_the_ledger(client):
     c, *_ = client
     c.post("/v1/extract", json={"url": "https://x/1"})
     body = c.get("/v1/usage").json()
-    assert body["plan"] == "free"
+    assert body["tier"] == "metered"
     assert body["month"]["records"] == 1
-    assert body["limits"]["monthly_records"] == get_plan("free").monthly_records
-    assert body["bill"]["total_usd"] == 0          # free plan, within quota
+    # One record delivered = one credit off the free allowance.
+    assert body["credits"]["balance"] == FREE_MONTHLY_CREDITS - 1
+    assert body["credits"]["free_monthly_allowance"] == FREE_MONTHLY_CREDITS
+    assert body["credits"]["cost_per_unit"]["new_site"] == CREDITS_PER_SYNTHESIS
     assert body["records_delivered"] == 1
     assert body["sites_compiled"] == 0
+    assert any("free allowance" in e["reason"] for e in body["recent_ledger"])
 
 
 def test_detect_is_charged_a_single_page(client, monkeypatch):
@@ -302,3 +321,53 @@ def test_catalog_crawl_charges_every_record_it_delivered(client, stub_core):
     assert got["status"] == "done"
     assert got["usage"]["records"] == 40
     assert store.usage_for_month(key.id).records == 40
+
+
+# ── credits ──────────────────────────────────────────────────────────────────
+def test_extract_reports_what_it_spent_and_what_is_left(client):
+    c, *_ = client
+    body = c.post("/v1/extract", json={"url": "https://x/1"}).json()
+    assert body["credits_spent"] == 1                      # one record
+    assert body["credits_left"] == FREE_MONTHLY_CREDITS - 1
+
+
+def test_a_render_costs_more_credits_than_a_plain_record(client):
+    c, store, key, _ = client
+    plain = c.post("/v1/extract", json={"url": "https://x/1"}).json()
+    rendered = c.post("/v1/extract", json={"url": "https://x/2", "js": True}).json()
+    assert rendered["credits_spent"] > plain["credits_spent"]
+
+
+def test_a_failed_extract_still_charges_work_that_actually_happened(client, stub_core):
+    """No record delivered, so no record credit -- but a render that ran is
+    real cost and is charged."""
+    c, store, key, _ = client
+    store.ensure_free_allowance(key.id, FREE_MONTHLY_CREDITS)
+    stub_core["record"] = None
+    before = store.balance(key.id)
+    c.post("/v1/extract", json={"url": "https://x/1", "js": True})   # 422
+    after = store.balance(key.id)
+    assert before - after == 5          # the render, not a record
+
+
+def test_topping_up_restores_service(client, stub_core):
+    c, store, key, _ = client
+    store.ensure_free_allowance(key.id, FREE_MONTHLY_CREDITS)
+    store.spend(key.id, FREE_MONTHLY_CREDITS, "earlier jobs")
+    assert c.post("/v1/extract", json={"url": "https://x/1"}).status_code == 402
+
+    store.grant(key.id, 10_000, "pack: starter", idempotency_key="pay_1")
+    assert c.post("/v1/extract", json={"url": "https://x/1"}).status_code == 200
+
+
+def test_unlimited_tier_is_metered_but_never_refused(client, tmp_path):
+    """Self-hosting: usage is still visible, but there is nobody to bill."""
+    c, store, _, _ = client
+    raw, key = store.create_key(label="self-host", plan="unlimited")
+    other = TestClient(c.app)
+    other.headers.update({"X-API-Key": raw})
+
+    store.spend(key.id, 5_000, "pretend overdraft")
+    r = other.post("/v1/extract", json={"url": "https://x/1"})
+    assert r.status_code == 200
+    assert store.usage_for_month(key.id).records == 1     # still counted

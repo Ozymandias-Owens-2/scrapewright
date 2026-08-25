@@ -179,32 +179,47 @@ curl -X POST localhost:8000/v1/extract   -H "X-API-Key: sw_..." -H "Content-Type
 | `GET /v1/jobs/{id}` | poll a crawl |
 | `GET /v1/usage` | what this key has consumed, against its plan |
 
-#### Pricing that follows the value, not the invoice
+#### Prepaid credits, no subscription
 
-Cost here is concentrated almost entirely in **compiling a new site** — one LLM
-pass over a page, measured at $0.02 on a small product page and $0.15 on a heavy
-rendered one. Everything after that is BeautifulSoup: the ten-thousandth record
-from a compiled site is free to serve.
+One action costs real money: **compiling a new site**, a single LLM pass over a
+page, measured at $0.02 on a small product page and $0.15 on a heavy rendered
+one. Everything after that is BeautifulSoup — the ten-thousandth record from a
+compiled site is free to serve. So credits are priced off that one action, and
+everything else is denominated relative to it:
 
-So the two are metered separately, and priced differently:
-
-* **Customers are billed for records delivered** — the thing they came for.
-* **New sites and browser renders carry fair-use caps** — the things that cost
-  us, kept in check so one customer aimed at a thousand new sites cannot quietly
-  become unprofitable.
+| Action | Credits |
+|---|---|
+| 1 record delivered | 1 |
+| 1 browser render | 5 |
+| 1 new site compiled | 300 |
+| page fetches, `detect` | free |
 
 ```
 $ scrapewright plans
-plan          price  records/mo  new sites   renders  worst cost   margin
-free           free       1,000         10       100       $0.63        -
-starter         $19      25,000         50     2,500       $3.75      80%
-pro             $79     250,000        300    25,000      $25.50      68%
+pack         credits   price   $/credit   margin
+starter       10,000     $10    0.00100    80.0%
+growth        50,000     $40    0.00080    75.0%
+scale        250,000    $150    0.00060    66.7%
+
+Free: 1,000 credits a month, resetting.
 ```
 
-"Worst cost" is a customer who drains an entire plan every month — the number a
-price has to beat. Changing a quota changes a margin, so the command that prints
-the model prints the margin next to it, and a test fails if any paid plan stops
-clearing 50%.
+Margin is measured on compiling a site, because that is the only step that
+costs anything; a test fails if a price edit drops any pack below 60%. A free
+account can cost us at most $0.20 a month, even if every free credit goes to
+the most expensive action there is.
+
+Credits are a **ledger, not a counter** — every grant and every charge is a row,
+so a disputed bill can be reconstructed line by line, and a replayed payment
+webhook cannot double-credit (grants take an idempotency key). Running out
+returns `402` with the balance and what to do about it; a crawl is capped by the
+credits on hand, so a job stops at what the caller can pay for instead of
+overdrawing.
+
+```bash
+scrapewright credits grant <key_id> --pack starter --idempotency <payment_id>
+scrapewright credits balance <key_id>
+```
 
 **Billing is a deliberate seam, not an integration.** `scrapewright.service.billing`
 defines a two-method `BillingProvider` protocol; the default charges nothing.
@@ -267,7 +282,8 @@ the number a recipe is trusted on before it's cached.
 | `extract/selectors` | Replays a recipe with BeautifulSoup — the deterministic runtime |
 | `schema` | `Schema`/`Field` — declare what to extract; `PRODUCT_SCHEMA` is the built-in default |
 | `service/` | FastAPI app: API keys (stored hashed), record-based quotas, cost metering, background crawl jobs, pluggable billing |
-| `service/pricing` | Measured unit costs, plan margins, and the customer's bill |
+| `service/credits` | Credit prices, packs, and the free allowance |
+| `service/pricing` | Measured unit costs and the margin each pack clears |
 | `mcp_server` | Five MCP tools so AI agents can call scrapewright directly |
 | `fetch` | `StaticFetcher` (plain HTTP) and `BrowserFetcher` (headless Chromium), plus the shell heuristic that decides when a render is worth paying for |
 | `crawl` | Frontier: turns one listing URL into product URLs (pattern match + card-template fallback + pagination) — deterministic, no LLM |
@@ -303,9 +319,9 @@ pytest
 
 ## Status
 
-v0.7 (alpha). Implemented and tested: an **HTTP service** with API keys, a
-**value-based pricing model** (billed on records delivered, capped on the units
-that cost), quota enforcement, cost metering and background jobs; **platform detection
+v0.8 (alpha). Implemented and tested: an **HTTP service** with API keys and
+**prepaid credits** (priced off the one action that costs money, on an auditable
+ledger), cost metering and background jobs; **platform detection
 across 12 storefronts**
 with a recommended strategy per site, catalog extraction (Shopify, WooCommerce),
 page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
@@ -313,7 +329,7 @@ page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
 frontier** (one listing URL → the whole site), **JS rendering** via an optional
 Playwright fetcher with automatic escalation, **schema-agnostic extraction**
 (bring your own fields), an **MCP server** for AI agents, coverage validation,
-and CSV / XLSX / JSONL export. 108 offline tests.
+and CSV / XLSX / JSONL export. 121 offline tests.
 
 Known limit, stated plainly: it does not defeat anti-bot walls — deliberately
 out of scope. Sites behind Akamai/Fastly-style challenges return an honest miss.
