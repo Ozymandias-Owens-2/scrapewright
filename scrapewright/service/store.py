@@ -6,11 +6,11 @@ Two deliberate choices here.
 again; the database keeps only a SHA-256 digest and a short public id. A stolen
 database therefore leaks no working credentials.
 
-**Usage is metered in the three units that actually cost money** — pages
-fetched, browser renders, and LLM syntheses — rather than a single opaque
-"request" count. That keeps the books honest and makes the product's own
-argument visible: as a customer scrapes more, `pages` climbs while `syntheses`
-stays flat, because a site is compiled once and replayed for free.
+**Usage separates value from cost.** `records` counts what the customer
+received — the unit quotas and bills run on. `syntheses`, `renders` and `pages`
+count what serving them cost us. Metering both makes the product's own argument
+visible in the customer's own dashboard: records climb while syntheses stay
+flat, because each site is compiled once and replayed for free.
 """
 
 from __future__ import annotations
@@ -24,7 +24,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 KEY_PREFIX = "sw_"
-METERS = ("requests", "pages", "renders", "syntheses")
+# `records` is the unit the customer receives; the rest are what serving them
+# costs us. Quotas price the first, fair-use caps protect the others.
+METERS = ("requests", "pages", "renders", "syntheses", "records")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -42,6 +44,7 @@ CREATE TABLE IF NOT EXISTS usage (
     pages       INTEGER NOT NULL DEFAULT 0,
     renders     INTEGER NOT NULL DEFAULT 0,
     syntheses   INTEGER NOT NULL DEFAULT 0,
+    records     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (key_id, day)
 );
 """
@@ -76,6 +79,7 @@ class Usage:
     pages: int = 0
     renders: int = 0
     syntheses: int = 0
+    records: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {m: getattr(self, m) for m in METERS}
@@ -88,6 +92,23 @@ class Store:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn) -> None:
+        """Add meters introduced after a database was first created.
+
+        A hosted service cannot drop its usage history to gain a column, so new
+        meters arrive as nullable-with-default and backfill to zero.
+        """
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(usage)")}
+        for meter in METERS:
+            if meter in existing:
+                continue
+            if not meter.isidentifier():  # names are a module constant, but the
+                continue                  # interpolation below deserves a guard
+            conn.execute(
+                f"ALTER TABLE usage ADD COLUMN {meter} INTEGER NOT NULL DEFAULT 0")
 
     @contextmanager
     def _conn(self):
@@ -144,18 +165,21 @@ class Store:
 
     # ── usage ────────────────────────────────────────────────────────────────
     def record(self, key_id: str, *, requests: int = 0, pages: int = 0,
-               renders: int = 0, syntheses: int = 0, day: str | None = None) -> None:
+               renders: int = 0, syntheses: int = 0, records: int = 0,
+               day: str | None = None) -> None:
         day = day or date.today().isoformat()
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO usage (key_id, day, requests, pages, renders, syntheses) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "INSERT INTO usage (key_id, day, requests, pages, renders, "
+                "                   syntheses, records) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(key_id, day) DO UPDATE SET "
                 "  requests = requests + excluded.requests,"
                 "  pages = pages + excluded.pages,"
                 "  renders = renders + excluded.renders,"
-                "  syntheses = syntheses + excluded.syntheses",
-                (key_id, day, requests, pages, renders, syntheses),
+                "  syntheses = syntheses + excluded.syntheses,"
+                "  records = records + excluded.records",
+                (key_id, day, requests, pages, renders, syntheses, records),
             )
 
     def usage_for_day(self, key_id: str, day: str | None = None) -> Usage:
@@ -170,10 +194,11 @@ class Store:
         month = month or date.today().strftime("%Y-%m")
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT SUM(requests) r, SUM(pages) p, SUM(renders) n, SUM(syntheses) s "
+                "SELECT SUM(requests) r, SUM(pages) p, SUM(renders) n, "
+                "       SUM(syntheses) s, SUM(records) d "
                 "FROM usage WHERE key_id = ? AND day LIKE ?", (key_id, f"{month}-%")
             ).fetchone()
         if row is None or row["r"] is None:
             return Usage()
         return Usage(requests=row["r"], pages=row["p"], renders=row["n"],
-                     syntheses=row["s"])
+                     syntheses=row["s"], records=row["d"])

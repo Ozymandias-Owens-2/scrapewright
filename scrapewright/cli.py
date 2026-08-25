@@ -167,6 +167,31 @@ def cmd_keys(args) -> int:
     return 0
 
 
+def cmd_plans(args) -> int:
+    """Show the pricing model against the cost its own caps allow."""
+    from .service.plans import PLANS
+    from .service.pricing import plan_margin
+
+    head = (f"{'plan':<11}{'price':>8}{'records/mo':>12}{'new sites':>11}"
+            f"{'renders':>10}{'worst cost':>12}{'margin':>9}")
+    print(head)
+    print("-" * len(head))
+    for plan in PLANS.values():
+        m = plan_margin(plan)
+        price = f"${plan.price_usd_month}" if plan.price_usd_month else "free"
+        records = "unlimited" if plan.monthly_records >= 10**9 else f"{plan.monthly_records:,}"
+        sites = "unlimited" if plan.monthly_syntheses >= 10**9 else str(plan.monthly_syntheses)
+        renders = "unlimited" if plan.monthly_renders >= 10**9 else f"{plan.monthly_renders:,}"
+        cost = "-" if plan.monthly_records >= 10**9 else f"${m['worst_case_cost_usd']:.2f}"
+        margin = f"{m['worst_case_margin_pct']:.0f}%" if plan.price_usd_month else "-"
+        print(f"{plan.name:<11}{price:>8}{records:>12}{sites:>11}{renders:>10}"
+              f"{cost:>12}{margin:>9}")
+    print()
+    print("Worst cost = a customer who consumes the entire plan every month.")
+    print("Records are what customers buy; new sites and renders are what cost us.")
+    return 0
+
+
 def cmd_mcp(args) -> int:
     """Serve the tools over MCP so an AI agent can call them."""
     from .mcp_server import build_server
@@ -234,6 +259,9 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--plan", default="free", choices=["free", "pro", "unlimited"])
     k.add_argument("--db", default="scrapewright_service.db")
     k.set_defaults(func=cmd_keys)
+
+    pl = sub.add_parser("plans", help="Show the pricing model and its margins")
+    pl.set_defaults(func=cmd_plans)
 
     m = sub.add_parser("mcp", help="Run as an MCP server for AI agents")
     m.add_argument("--transport", default="stdio",

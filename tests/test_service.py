@@ -150,12 +150,12 @@ def test_pipeline_is_always_closed(client, stub_core):
 def test_quota_refusal_happens_before_any_work(client, stub_core):
     c, store, key, _ = client
     plan = get_plan("free")
-    store.record(key.id, pages=plan.monthly_pages)
+    store.record(key.id, records=plan.monthly_records)
 
     built_before = len(stub_core["built"])
     r = c.post("/v1/extract", json={"url": "https://x/1"})
     assert r.status_code == 429
-    assert "monthly page quota" in r.json()["detail"]
+    assert "record quota" in r.json()["detail"]
     # Refused means not charged: no pipeline was ever constructed.
     assert len(stub_core["built"]) == built_before
 
@@ -165,7 +165,7 @@ def test_daily_synthesis_quota_message_mentions_compiled_sites(client):
     store.record(key.id, syntheses=get_plan("free").daily_syntheses)
     r = c.post("/v1/extract", json={"url": "https://x/1"})
     assert r.status_code == 429
-    assert "already-compiled sites still work" in r.json()["detail"]
+    assert "already compiled still work" in r.json()["detail"]
 
 
 # ── crawl jobs ───────────────────────────────────────────────────────────────
@@ -228,9 +228,11 @@ def test_usage_endpoint_reports_plan_and_counters(client):
     c.post("/v1/extract", json={"url": "https://x/1"})
     body = c.get("/v1/usage").json()
     assert body["plan"] == "free"
-    assert body["month"]["pages"] >= 1
-    assert body["limits"]["monthly_pages"] == get_plan("free").monthly_pages
-    assert "sites_compiled" in body
+    assert body["month"]["records"] == 1
+    assert body["limits"]["monthly_records"] == get_plan("free").monthly_records
+    assert body["bill"]["total_usd"] == 0          # free plan, within quota
+    assert body["records_delivered"] == 1
+    assert body["sites_compiled"] == 0
 
 
 def test_detect_is_charged_a_single_page(client, monkeypatch):
@@ -268,3 +270,35 @@ def test_catalog_crawls_are_metered_by_records_delivered(client, stub_core):
             break
     assert got["status"] == "done"
     assert got["usage"]["pages"] >= 7
+
+
+# ── pricing: quotas follow value, caps follow cost ───────────────────────────
+def test_extract_charges_a_record_only_when_one_is_delivered(client, stub_core):
+    c, store, key, _ = client
+    c.post("/v1/extract", json={"url": "https://x/1"})
+    assert store.usage_for_month(key.id).records == 1
+
+    stub_core["record"] = None
+    c.post("/v1/extract", json={"url": "https://x/2"})   # 422, nothing found
+    assert store.usage_for_month(key.id).records == 1    # unchanged: no charge
+
+
+def test_catalog_crawl_charges_every_record_it_delivered(client, stub_core):
+    """The gap this closes: a platform catalog returns hundreds of products in
+    two JSON requests, so fetch counts describe our effort, not the customer's
+    benefit. Quotas must track what they received."""
+    c, store, key, _ = client
+    stub_core["records"] = [
+        Record(url=f"https://x/{i}", schema_name="product",
+               data={"title": f"P{i}", "price": "5"}, source_platform="shopify")
+        for i in range(40)
+    ]
+    job_id = c.post("/v1/crawl", json={"url": "https://x/shop",
+                                       "max_items": 50}).json()["job_id"]
+    for _ in range(50):
+        got = c.get(f"/v1/jobs/{job_id}").json()
+        if got["status"] in ("done", "error"):
+            break
+    assert got["status"] == "done"
+    assert got["usage"]["records"] == 40
+    assert store.usage_for_month(key.id).records == 40

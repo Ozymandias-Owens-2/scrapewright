@@ -29,6 +29,7 @@ from .billing import BillingProvider, NoopBilling
 from .jobs import JobRegistry
 from .metering import metered_scrapewright
 from .plans import get_plan
+from .pricing import bill_for
 from .store import ApiKey, Store
 
 MAX_ITEMS_HARD_CAP = 1000
@@ -131,11 +132,14 @@ def create_app(store: Store | None = None,
 
         schema = _schema_for(req.fields)
         sw, meter = metered_scrapewright(js=req.js)
+        record = None
         try:
             record = sw.extract(req.url, schema)
         finally:
             sw.close()
-            charge(key, meter.as_dict())
+            # Charge for what was delivered, not for the attempt: a page that
+            # yields nothing costs the customer no records.
+            charge(key, {**meter.as_dict(), "records": 1 if record else 0})
 
         if record is None:
             raise HTTPException(
@@ -162,16 +166,13 @@ def create_app(store: Store | None = None,
                 records = list(sw.crawl_records(req.url, schema, max_items=max_items))
             finally:
                 sw.close()
-                # A platform catalog hands back hundreds of products in a couple
-                # of JSON requests, so raw fetch counts understate it badly --
-                # a customer could drain a catalog against a zero page count.
-                # Charge at least one page per record delivered: quotas should
-                # track what the caller received, not how few requests it took.
-                meter.pages = max(meter.pages, len(records))
-                charge(key, meter.as_dict())
+                # A platform catalog returns hundreds of products in a couple of
+                # JSON requests, so fetch counts describe our effort, not the
+                # customer's benefit. `records` is the meter quotas run on.
+                usage = {**meter.as_dict(), "records": len(records)}
+                charge(key, usage)
             return ({"count": len(records),
-                     "records": [_record_payload(r) for r in records]},
-                    meter.as_dict())
+                     "records": [_record_payload(r) for r in records]}, usage)
 
         job = jobs.submit(key.id, "crawl", work)
         return {**job.as_dict(), "max_items": max_items,
@@ -200,12 +201,15 @@ def create_app(store: Store | None = None,
             "plan": plan.name,
             "month": month.as_dict(),
             "today": today.as_dict(),
-            "limits": {"monthly_pages": plan.monthly_pages,
-                       "monthly_renders": plan.monthly_renders,
+            "limits": {"monthly_records": plan.monthly_records,
                        "monthly_syntheses": plan.monthly_syntheses,
                        "daily_syntheses": plan.daily_syntheses,
+                       "monthly_renders": plan.monthly_renders,
                        "max_items_per_job": plan.max_items_per_job},
-            # The product's own argument, made visible: pages grow, syntheses don't.
+            "bill": bill_for(plan, month),
+            # The product's own argument, made visible: records climb while
+            # sites_compiled stays flat, because each site is compiled once.
+            "records_delivered": month.records,
             "sites_compiled": month.syntheses,
         }
 

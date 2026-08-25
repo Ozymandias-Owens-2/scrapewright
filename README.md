@@ -179,11 +179,32 @@ curl -X POST localhost:8000/v1/extract   -H "X-API-Key: sw_..." -H "Content-Type
 | `GET /v1/jobs/{id}` | poll a crawl |
 | `GET /v1/usage` | what this key has consumed, against its plan |
 
-Usage is metered in the three units that actually cost something — **pages,
-browser renders, and LLM syntheses** — rather than one opaque request count.
-That keeps quotas honest, and makes the product's own argument visible in the
-customer's dashboard: as they scrape more, `pages` climbs while `syntheses`
-stays flat, because each site is compiled once.
+#### Pricing that follows the value, not the invoice
+
+Cost here is concentrated almost entirely in **compiling a new site** — one LLM
+pass over a page, measured at $0.02 on a small product page and $0.15 on a heavy
+rendered one. Everything after that is BeautifulSoup: the ten-thousandth record
+from a compiled site is free to serve.
+
+So the two are metered separately, and priced differently:
+
+* **Customers are billed for records delivered** — the thing they came for.
+* **New sites and browser renders carry fair-use caps** — the things that cost
+  us, kept in check so one customer aimed at a thousand new sites cannot quietly
+  become unprofitable.
+
+```
+$ scrapewright plans
+plan          price  records/mo  new sites   renders  worst cost   margin
+free           free       1,000         10       100       $0.63        -
+starter         $19      25,000         50     2,500       $3.75      80%
+pro             $79     250,000        300    25,000      $25.50      68%
+```
+
+"Worst cost" is a customer who drains an entire plan every month — the number a
+price has to beat. Changing a quota changes a margin, so the command that prints
+the model prints the margin next to it, and a test fails if any paid plan stops
+clearing 50%.
 
 **Billing is a deliberate seam, not an integration.** `scrapewright.service.billing`
 defines a two-method `BillingProvider` protocol; the default charges nothing.
@@ -245,7 +266,8 @@ the number a recipe is trusted on before it's cached.
 | `extract/llm` | Synthesizes a `SelectorRecipe` from HTML — the one-time compile step |
 | `extract/selectors` | Replays a recipe with BeautifulSoup — the deterministic runtime |
 | `schema` | `Schema`/`Field` — declare what to extract; `PRODUCT_SCHEMA` is the built-in default |
-| `service/` | FastAPI app: API keys (stored hashed), plans and quotas, usage metering, background crawl jobs, pluggable billing |
+| `service/` | FastAPI app: API keys (stored hashed), record-based quotas, cost metering, background crawl jobs, pluggable billing |
+| `service/pricing` | Measured unit costs, plan margins, and the customer's bill |
 | `mcp_server` | Five MCP tools so AI agents can call scrapewright directly |
 | `fetch` | `StaticFetcher` (plain HTTP) and `BrowserFetcher` (headless Chromium), plus the shell heuristic that decides when a render is worth paying for |
 | `crawl` | Frontier: turns one listing URL into product URLs (pattern match + card-template fallback + pagination) — deterministic, no LLM |
@@ -281,8 +303,9 @@ pytest
 
 ## Status
 
-v0.6 (alpha). Implemented and tested: an **HTTP service** with API keys, plans,
-quota enforcement, usage metering and background jobs; **platform detection
+v0.7 (alpha). Implemented and tested: an **HTTP service** with API keys, a
+**value-based pricing model** (billed on records delivered, capped on the units
+that cost), quota enforcement, cost metering and background jobs; **platform detection
 across 12 storefronts**
 with a recommended strategy per site, catalog extraction (Shopify, WooCommerce),
 page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
@@ -290,7 +313,7 @@ page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
 frontier** (one listing URL → the whole site), **JS rendering** via an optional
 Playwright fetcher with automatic escalation, **schema-agnostic extraction**
 (bring your own fields), an **MCP server** for AI agents, coverage validation,
-and CSV / XLSX / JSONL export. 98 offline tests.
+and CSV / XLSX / JSONL export. 108 offline tests.
 
 Known limit, stated plainly: it does not defeat anti-bot walls — deliberately
 out of scope. Sites behind Akamai/Fastly-style challenges return an honest miss.
