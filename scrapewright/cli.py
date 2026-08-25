@@ -43,7 +43,17 @@ def _deliver(items, out: str | None, label: str) -> None:
 
 def cmd_detect(args) -> int:
     det = detect(args.url)
-    print(f"{det.base}\n  platform: {det.kind}\n  catalog:  {det.catalog_endpoint or '-'}\n  note:     {det.note}")
+    also = [m for m in det.matched if m != det.kind]
+    lines = [
+        det.base,
+        f"  platform: {det.kind}" + (f" (also: {', '.join(also)})" if also else ""),
+        f"  catalog:  {det.catalog_endpoint or '-'}",
+        f"  strategy: {det.strategy}",
+        f"  note:     {det.note}",
+    ]
+    if det.likely_needs_js:
+        lines.append("  hint:     this platform renders client-side; add --js")
+    print("\n".join(lines))
     return 0
 
 

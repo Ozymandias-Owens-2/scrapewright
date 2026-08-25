@@ -80,7 +80,7 @@ for product in sw.crawl("https://boutique.example.com/collection", max_items=100
 ### CLI
 
 ```bash
-scrapewright detect https://shop.example.com          # what platform is this?
+scrapewright detect https://shop.example.com          # platform + strategy
 scrapewright run    https://shop.example.com --max 50 # scrape a catalog → JSONL
 scrapewright crawl  https://boutique.example.com/collection -o products.xlsx
 scrapewright run    https://shop.example.com -o products.csv   # Excel-ready CSV
@@ -91,6 +91,30 @@ scrapewright list                                     # cached recipe domains
 
 `-o` writes `.csv` (Excel-ready, UTF-8 BOM), `.xlsx` (`pip install scrapewright[excel]`),
 or `.jsonl`; without it, products stream to stdout as JSONL.
+
+### Know what you are dealing with
+
+`detect` answers the routing question before a job starts:
+
+```
+$ scrapewright detect https://some-store.com
+https://some-store.com
+  platform: bigcommerce
+  catalog:  -
+  strategy: crawl
+  note:     BigCommerce (Stencil) markup
+```
+
+Twelve platforms are recognized: **Shopify** and **WooCommerce** publish a free
+JSON catalog, so those route to `catalog` — deterministic, no LLM, no browser.
+**Magento, BigCommerce, Salesforce Commerce Cloud, Squarespace, Wix, Webflow,
+PrestaShop, Shopware, Ecwid** and **OpenCart** are recognized by fingerprint and
+route to `crawl`, where the recipe path handles them like any custom site — the
+point of naming them is knowing what you face, not writing twelve parsers.
+Wix and Ecwid render client-side, so detection says `crawl+js` up front.
+
+A site behind an anti-bot wall reports `strategy: blocked` with the HTTP status,
+rather than pretending it found nothing.
 
 ### Bring your own schema
 
@@ -172,7 +196,7 @@ the number a recipe is trusted on before it's cached.
 
 | Module | Role |
 |---|---|
-| `detect` | Platform probe: Shopify → WooCommerce → generic |
+| `detect` | Platform registry: free-catalog probes, then fingerprints for 12 platforms; returns the strategy to use |
 | `extract/shopify`, `extract/woocommerce` | Deterministic catalog extractors |
 | `extract/jsonld` | schema.org/Product from `<script type="application/ld+json">` — free, ~common |
 | `extract/llm` | Synthesizes a `SelectorRecipe` from HTML — the one-time compile step |
@@ -213,19 +237,20 @@ pytest
 
 ## Status
 
-v0.4 (alpha). Implemented and tested: catalog extraction (Shopify, WooCommerce),
+v0.5 (alpha). Implemented and tested: **platform detection across 12 storefronts**
+with a recommended strategy per site, catalog extraction (Shopify, WooCommerce),
 page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
 **self-healing re-synthesis** with a bounded per-run model budget, a **crawl
 frontier** (one listing URL → the whole site), **JS rendering** via an optional
 Playwright fetcher with automatic escalation, **schema-agnostic extraction**
 (bring your own fields), an **MCP server** for AI agents, coverage validation,
-and CSV / XLSX / JSONL export. 58 offline tests.
+and CSV / XLSX / JSONL export. 80 offline tests.
 
 Known limit, stated plainly: it does not defeat anti-bot walls — deliberately
 out of scope. Sites behind Akamai/Fastly-style challenges return an honest miss.
 
-Roadmap: BigCommerce / Salesforce Commerce detectors, and pagination strategies
-for infinite-scroll listings.
+Roadmap: pagination strategies for infinite-scroll listings, and a hosted
+service around the same core.
 
 ## License
 

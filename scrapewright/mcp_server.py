@@ -78,12 +78,25 @@ def build_server():
 
     @server.tool()
     def detect_site(url: str) -> dict[str, Any]:
-        """Report what platform a site runs on and whether it exposes a free
-        catalog API. Cheap and always worth calling before a large job."""
+        """Report what platform a site runs on, whether it exposes a free
+        catalog API, and which strategy to use. Cheap, and always worth calling
+        before a large job: `strategy` tells you which of the other tools to
+        reach for, and whether you will need js=true."""
         det = detect(url)
+        if det.strategy == "blocked":
+            next_tool = None
+        elif det.has_catalog_api:
+            next_tool = "scrape_catalog"
+        else:
+            next_tool = "crawl_site"
         return {"base": det.base, "platform": det.kind,
-                "catalog_endpoint": det.catalog_endpoint, "note": det.note,
-                "free": det.kind in ("shopify", "woocommerce")}
+                "also_matched": [m for m in det.matched if m != det.kind],
+                "catalog_endpoint": det.catalog_endpoint,
+                "strategy": det.strategy,
+                "free": det.has_catalog_api,
+                "use_js": det.likely_needs_js,
+                "recommended_tool": next_tool,
+                "note": det.note}
 
     @server.tool()
     def scrape_catalog(url: str, max_items: int = 50) -> dict[str, Any]:
