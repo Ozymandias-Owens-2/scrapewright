@@ -156,6 +156,49 @@ page, forever. These tools pay **once per site** — an agent crawling 500 pages
 one synthesis, not five hundred, and platform stores (Shopify, WooCommerce) cost
 nothing at all.
 
+### Run it as a service
+
+The same core behind an HTTP API, with keys, quotas, metering and background
+jobs:
+
+```bash
+pip install "scrapewright[service,llm]"
+scrapewright keys create --label alice --plan free
+scrapewright serve --port 8000
+```
+
+```bash
+curl -X POST localhost:8000/v1/extract   -H "X-API-Key: sw_..." -H "Content-Type: application/json"   -d '{"url": "https://shop.example.com/products/coat"}'
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/detect` | platform + strategy (cheap) |
+| `POST /v1/extract` | one page -> structured record |
+| `POST /v1/crawl` | a whole site -> job id (crawls outlive a request) |
+| `GET /v1/jobs/{id}` | poll a crawl |
+| `GET /v1/usage` | what this key has consumed, against its plan |
+
+Usage is metered in the three units that actually cost something — **pages,
+browser renders, and LLM syntheses** — rather than one opaque request count.
+That keeps quotas honest, and makes the product's own argument visible in the
+customer's dashboard: as they scrape more, `pages` climbs while `syntheses`
+stays flat, because each site is compiled once.
+
+**Billing is a deliberate seam, not an integration.** `scrapewright.service.billing`
+defines a two-method `BillingProvider` protocol; the default charges nothing.
+Payment processors differ by jurisdiction and operator, so the service owns
+identity, entitlement and metering, and leaves the invoice to whatever provider
+you can actually use.
+
+Docker:
+
+```bash
+docker build -t scrapewright .                       # static paths
+docker build -t scrapewright --build-arg WITH_JS=1 . # + headless Chromium
+docker run -p 8000:8000 -v sw-data:/data scrapewright
+```
+
 ### Client-side-rendered stores
 
 Add `--js` (or `Scrapewright(js=True)`) and pages that render their catalog in the
@@ -202,6 +245,7 @@ the number a recipe is trusted on before it's cached.
 | `extract/llm` | Synthesizes a `SelectorRecipe` from HTML — the one-time compile step |
 | `extract/selectors` | Replays a recipe with BeautifulSoup — the deterministic runtime |
 | `schema` | `Schema`/`Field` — declare what to extract; `PRODUCT_SCHEMA` is the built-in default |
+| `service/` | FastAPI app: API keys (stored hashed), plans and quotas, usage metering, background crawl jobs, pluggable billing |
 | `mcp_server` | Five MCP tools so AI agents can call scrapewright directly |
 | `fetch` | `StaticFetcher` (plain HTTP) and `BrowserFetcher` (headless Chromium), plus the shell heuristic that decides when a render is worth paying for |
 | `crawl` | Frontier: turns one listing URL into product URLs (pattern match + card-template fallback + pagination) — deterministic, no LLM |
@@ -237,20 +281,22 @@ pytest
 
 ## Status
 
-v0.5 (alpha). Implemented and tested: **platform detection across 12 storefronts**
+v0.6 (alpha). Implemented and tested: an **HTTP service** with API keys, plans,
+quota enforcement, usage metering and background jobs; **platform detection
+across 12 storefronts**
 with a recommended strategy per site, catalog extraction (Shopify, WooCommerce),
 page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
 **self-healing re-synthesis** with a bounded per-run model budget, a **crawl
 frontier** (one listing URL → the whole site), **JS rendering** via an optional
 Playwright fetcher with automatic escalation, **schema-agnostic extraction**
 (bring your own fields), an **MCP server** for AI agents, coverage validation,
-and CSV / XLSX / JSONL export. 80 offline tests.
+and CSV / XLSX / JSONL export. 98 offline tests.
 
 Known limit, stated plainly: it does not defeat anti-bot walls — deliberately
 out of scope. Sites behind Akamai/Fastly-style challenges return an honest miss.
 
-Roadmap: pagination strategies for infinite-scroll listings, and a hosted
-service around the same core.
+Roadmap: pagination strategies for infinite-scroll listings, and a deployed
+instance of the service.
 
 ## License
 

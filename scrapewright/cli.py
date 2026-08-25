@@ -126,6 +126,47 @@ def cmd_list(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    """Run the HTTP service."""
+    try:
+        import uvicorn
+    except ImportError:
+        print("The service needs FastAPI and uvicorn. Install with:", file=sys.stderr)
+        print('    pip install "scrapewright[service]"', file=sys.stderr)
+        return 1
+    from .service.app import create_app
+    from .service.store import Store
+
+    app = create_app(store=Store(args.db))
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
+
+
+def cmd_keys(args) -> int:
+    """Mint, list and revoke API keys for the service."""
+    from .service.store import Store
+
+    store = Store(args.db)
+    if args.action == "create":
+        raw, record = store.create_key(label=args.label or "", plan=args.plan)
+        print(f"key id:  {record.id}")
+        print(f"plan:    {record.plan}")
+        print(f"API key: {raw}")
+        print("", file=sys.stderr)
+        print("Store it now — only its hash is kept, so it cannot be shown again.",
+              file=sys.stderr)
+    elif args.action == "list":
+        rows = store.list_keys()
+        if not rows:
+            print("no keys yet", file=sys.stderr)
+        for k in rows:
+            state = "active" if k.active else "revoked"
+            print(f"{k.id}  {k.plan:<10} {state:<8} {k.created_at}  {k.label}")
+    elif args.action == "revoke":
+        print("revoked" if store.revoke(args.key_id) else "no such active key")
+    return 0
+
+
 def cmd_mcp(args) -> int:
     """Serve the tools over MCP so an AI agent can call them."""
     from .mcp_server import build_server
@@ -179,6 +220,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     ls = sub.add_parser("list", help="List cached recipe keys")
     ls.set_defaults(func=cmd_list)
+
+    sv = sub.add_parser("serve", help="Run the HTTP service (API keys, quotas, jobs)")
+    sv.add_argument("--host", default="0.0.0.0")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--db", default="scrapewright_service.db")
+    sv.set_defaults(func=cmd_serve)
+
+    k = sub.add_parser("keys", help="Manage service API keys")
+    k.add_argument("action", choices=["create", "list", "revoke"])
+    k.add_argument("key_id", nargs="?", default=None, help="for: revoke")
+    k.add_argument("--label", default=None)
+    k.add_argument("--plan", default="free", choices=["free", "pro", "unlimited"])
+    k.add_argument("--db", default="scrapewright_service.db")
+    k.set_defaults(func=cmd_keys)
 
     m = sub.add_parser("mcp", help="Run as an MCP server for AI agents")
     m.add_argument("--transport", default="stdio",
