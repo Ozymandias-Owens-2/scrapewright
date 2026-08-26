@@ -221,11 +221,41 @@ scrapewright credits grant <key_id> --pack starter --idempotency <payment_id>
 scrapewright credits balance <key_id>
 ```
 
-**Billing is a deliberate seam, not an integration.** `scrapewright.service.billing`
-defines a two-method `BillingProvider` protocol; the default charges nothing.
-Payment processors differ by jurisdiction and operator, so the service owns
-identity, entitlement and metering, and leaves the invoice to whatever provider
-you can actually use.
+#### Taking payment
+
+Stripe is wired in and turned on by environment, not by a code change:
+
+```bash
+pip install "scrapewright[service,stripe]"
+export STRIPE_SECRET_KEY=sk_test_...      # absent -> nothing is for sale
+export STRIPE_WEBHOOK_SECRET=whsec_...    # absent -> webhooks are refused
+scrapewright serve
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/credits/packs` | the price list — public, no key needed |
+| `POST /v1/credits/checkout` | start a purchase, returns a Stripe Checkout URL |
+| `POST /v1/webhooks/stripe` | payment notifications from Stripe |
+
+The webhook endpoint takes **no API key** — Stripe is the caller, so the
+signature *is* the credential, and an unverified endpoint would be a free credit
+printer for anyone who guessed the URL. Three rules hold the integration up:
+
+* **Verify every signature.** No signing secret configured means webhooks are
+  refused outright, rather than accepted unverified.
+* **Never trust an amount off the wire.** The event names a pack; how many
+  credits that pack is worth is looked up from our own price list, so a tampered
+  payload buys exactly what it paid for or nothing at all.
+* **Grant idempotently, keyed on the Checkout session.** Stripe retries
+  deliveries, and one payment can produce several event types — the session id
+  is what identifies the money that actually moved.
+
+`examples/stripe_smoke_test.py` runs the whole path against Stripe's test mode
+with the 4242 card. Any other provider plugs into the same two-method
+`BillingProvider` protocol in `scrapewright.service.billing`; without one, the
+service simply runs free, which is the right default for a demo or a self-hosted
+instance.
 
 Docker:
 
@@ -283,6 +313,7 @@ the number a recipe is trusted on before it's cached.
 | `schema` | `Schema`/`Field` — declare what to extract; `PRODUCT_SCHEMA` is the built-in default |
 | `service/` | FastAPI app: API keys (stored hashed), record-based quotas, cost metering, background crawl jobs, pluggable billing |
 | `service/credits` | Credit prices, packs, and the free allowance |
+| `service/stripe_billing` | Stripe Checkout + signature-verified webhook |
 | `service/pricing` | Measured unit costs and the margin each pack clears |
 | `mcp_server` | Five MCP tools so AI agents can call scrapewright directly |
 | `fetch` | `StaticFetcher` (plain HTTP) and `BrowserFetcher` (headless Chromium), plus the shell heuristic that decides when a render is worth paying for |
@@ -319,9 +350,10 @@ pytest
 
 ## Status
 
-v0.8 (alpha). Implemented and tested: an **HTTP service** with API keys and
+v0.9 (alpha). Implemented and tested: an **HTTP service** with API keys,
 **prepaid credits** (priced off the one action that costs money, on an auditable
-ledger), cost metering and background jobs; **platform detection
+ledger) and **Stripe checkout with a signature-verified webhook**, cost metering
+and background jobs; **platform detection
 across 12 storefronts**
 with a recommended strategy per site, catalog extraction (Shopify, WooCommerce),
 page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
@@ -329,7 +361,7 @@ page extraction (JSON-LD, LLM-synthesized selectors), recipe caching,
 frontier** (one listing URL → the whole site), **JS rendering** via an optional
 Playwright fetcher with automatic escalation, **schema-agnostic extraction**
 (bring your own fields), an **MCP server** for AI agents, coverage validation,
-and CSV / XLSX / JSONL export. 121 offline tests.
+and CSV / XLSX / JSONL export. 141 offline tests.
 
 Known limit, stated plainly: it does not defeat anti-bot walls — deliberately
 out of scope. Sites behind Akamai/Fastly-style challenges return an honest miss.

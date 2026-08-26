@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from .. import __version__
@@ -28,7 +28,8 @@ from ..schema import PRODUCT_SCHEMA, Schema
 from .billing import BillingProvider, NoopBilling
 from .jobs import JobRegistry
 from .metering import metered_scrapewright
-from .credits import FREE_MONTHLY_CREDITS, credits_for, describe_costs
+from .credits import (FREE_MONTHLY_CREDITS, PACKS, PACKS_BY_NAME,
+                      credits_for, describe_costs)
 from .plans import get_tier
 from .pricing import value_of
 from .store import ApiKey, Store, Usage
@@ -57,6 +58,10 @@ class CrawlRequest(ExtractRequest):
     max_items: int = 25
 
 
+class CheckoutRequest(BaseModel):
+    pack: str = Field(description="starter | growth | scale")
+
+
 def _schema_for(fields: list[str] | None) -> Schema:
     return Schema.from_names(fields, name="custom") if fields else PRODUCT_SCHEMA
 
@@ -68,12 +73,25 @@ def _record_payload(record: Record) -> dict[str, Any]:
                      for k, v in record.data.items()}}
 
 
+def _default_billing() -> BillingProvider:
+    """Stripe when a key is configured, otherwise nothing is for sale.
+
+    Chosen by environment rather than by flag so the same image runs as a free
+    demo, a self-hosted instance, or a paid service without a code change.
+    """
+    if not os.environ.get("STRIPE_SECRET_KEY"):
+        return NoopBilling()
+    from .stripe_billing import StripeBilling
+
+    return StripeBilling()
+
+
 # ── app factory ──────────────────────────────────────────────────────────────
 def create_app(store: Store | None = None,
                billing: BillingProvider | None = None,
                jobs: JobRegistry | None = None) -> FastAPI:
     store = store or Store(os.environ.get("SCRAPEWRIGHT_DB", "scrapewright_service.db"))
-    billing = billing or NoopBilling()
+    billing = billing or _default_billing()
     jobs = jobs or JobRegistry()
 
     app = FastAPI(
@@ -220,6 +238,56 @@ def create_app(store: Store | None = None,
     def jobs_endpoint(key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         return {"jobs": [j.as_dict(include_result=False)
                          for j in jobs.list_for(key.id)]}
+
+    # ── buying credits ───────────────────────────────────────────────────────
+    @app.get("/v1/credits/packs")
+    def packs_endpoint() -> dict[str, Any]:
+        """The price list. Public: nobody should need a key to read prices."""
+        return {"cost_per_unit": describe_costs(),
+                "free_monthly_allowance": FREE_MONTHLY_CREDITS,
+                "packs": [{"name": p.name, "credits": p.credits,
+                           "price_usd": p.price_usd,
+                           "usd_per_credit": round(p.usd_per_credit, 5)}
+                          for p in PACKS]}
+
+    @app.post("/v1/credits/checkout")
+    def checkout_endpoint(req: CheckoutRequest,
+                          key: ApiKey = Depends(require_key)) -> dict[str, Any]:
+        """Start a purchase. Returns a Stripe Checkout URL to send the customer to."""
+        pack = PACKS_BY_NAME.get(req.pack)
+        if pack is None:
+            raise HTTPException(400, f"unknown pack {req.pack!r}; "
+                                     f"choose one of {', '.join(PACKS_BY_NAME)}")
+        starter = getattr(billing, "checkout_session", None)
+        if starter is None:
+            raise HTTPException(
+                501, "this deployment has no payment provider configured; "
+                     "credits are granted by the operator")
+        try:
+            return starter(key, pack)
+        except Exception as e:
+            # A misconfigured key is our problem, not a client error.
+            raise HTTPException(503, f"payment provider unavailable: {e}") from e
+
+    @app.post("/v1/webhooks/stripe")
+    async def stripe_webhook(request: Request,
+                             stripe_signature: str = Header(default="")) -> dict[str, Any]:
+        """Payment notifications from Stripe.
+
+        Deliberately unauthenticated by API key -- Stripe is the caller, and the
+        signature is the credential. The raw body is passed through untouched,
+        because signature verification is over exact bytes.
+        """
+        handler = getattr(billing, "handle_webhook", None)
+        if handler is None:
+            raise HTTPException(501, "no payment provider configured")
+        body = await request.body()
+        try:
+            return handler(body, stripe_signature, store)
+        except Exception as e:
+            if type(e).__name__ == "StripeWebhookError":
+                raise HTTPException(400, str(e)) from e
+            raise HTTPException(503, f"webhook could not be processed: {e}") from e
 
     @app.get("/v1/usage")
     def usage_endpoint(key: ApiKey = Depends(require_key)) -> dict[str, Any]:
