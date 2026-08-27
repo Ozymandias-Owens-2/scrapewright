@@ -20,7 +20,7 @@ from .pipeline import Scrapewright, check
 from .schema import PRODUCT_SCHEMA, Field, Schema
 from .validate import Coverage, coverage
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 __all__ = [
     "Scrapewright",
