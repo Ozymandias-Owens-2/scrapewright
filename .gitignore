@@ -23,3 +23,7 @@ recipes.json
 .DS_Store
 Thumbs.db
 promo/
+
+# local service databases
+*.db
+smoke.db
