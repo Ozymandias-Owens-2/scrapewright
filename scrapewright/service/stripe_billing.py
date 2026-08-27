@@ -39,6 +39,29 @@ from .store import ApiKey, Store
 PAID_EVENT = "checkout.session.completed"
 
 
+def _plain(value: Any) -> Any:
+    """Flatten Stripe's response objects into ordinary dicts and lists.
+
+    ``construct_event`` returns a ``stripe.Event``. It is not a mapping, and
+    since SDK v8 it raises on ``.get()`` instead of quietly pretending to be
+    one. Converting once, at the boundary, keeps every caller working with
+    plain Python data -- and means a test that stubs the SDK with dicts
+    exercises the same code path the real SDK takes.
+
+    ``to_dict()`` is shallow in some versions, so recurse rather than trust it.
+    """
+    for method in ("to_dict_recursive", "to_dict"):
+        convert = getattr(value, method, None)
+        if callable(convert):
+            return _plain(convert())
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return value
+
+
+
 class StripeConfigError(RuntimeError):
     """Raised when the keys needed for a live integration are missing."""
 
@@ -135,11 +158,12 @@ class StripeBilling:
                 "STRIPE_WEBHOOK_SECRET is not set; refusing to accept webhooks "
                 "that cannot be verified")
         try:
-            return self.stripe.Webhook.construct_event(
+            event = self.stripe.Webhook.construct_event(
                 payload, signature, self.webhook_secret)
         except Exception as e:
             # Bad signature, stale timestamp, malformed body -- all untrusted.
             raise StripeWebhookError(f"unverified webhook: {e}") from e
+        return _plain(event)
 
     def handle_webhook(self, payload: bytes, signature: str,
                        store: Store) -> dict[str, Any]:
