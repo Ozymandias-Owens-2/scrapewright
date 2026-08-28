@@ -115,6 +115,13 @@ class BrowserFetcher:
         return self._page
 
     def fetch(self, url: str) -> str | None:
+        # Rendering is still fetching: the browser path must obey robots too,
+        # and it does not go through http.get.
+        from .robots import RobotsDisallowed, check
+        try:
+            check(url)
+        except RobotsDisallowed:
+            return None
         page = self._ensure_page()
         try:
             page.goto(url, wait_until=self.wait_until, timeout=self.timeout_ms)
