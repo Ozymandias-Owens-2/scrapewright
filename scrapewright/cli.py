@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 
@@ -295,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     sv = sub.add_parser("serve", help="Run the HTTP service (API keys, quotas, jobs)")
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8000)
-    sv.add_argument("--db", default="scrapewright_service.db")
+    sv.add_argument("--db", default=_default_db())
     sv.set_defaults(func=cmd_serve)
 
     k = sub.add_parser("keys", help="Manage service API keys")
@@ -305,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--plan", default="metered",
                    choices=["metered", "unlimited"],
                    help="metered keys spend credits; unlimited is for self-hosting")
-    k.add_argument("--db", default="scrapewright_service.db")
+    k.add_argument("--db", default=_default_db())
     k.set_defaults(func=cmd_keys)
 
     pl = sub.add_parser("plans", help="Show the credit model and its margins")
@@ -321,7 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--idempotency", default=None,
                     help="payment id, so a replayed webhook cannot double-credit")
     cr.add_argument("--limit", type=int, default=10, help="ledger lines to show")
-    cr.add_argument("--db", default="scrapewright_service.db")
+    cr.add_argument("--db", default=_default_db())
     cr.set_defaults(func=cmd_credits)
 
     m = sub.add_parser("mcp", help="Run as an MCP server for AI agents")
@@ -330,6 +331,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="MCP transport (default: stdio)")
     m.set_defaults(func=cmd_mcp)
     return p
+
+
+def _default_db() -> str:
+    """Where the service keeps its data.
+
+    Read from the environment so a container can point it at a mounted volume.
+    Without this the Dockerfile's SCRAPEWRIGHT_DB was set and then ignored, and
+    the credit ledger -- customers' paid balances -- would have been written
+    inside the container and destroyed on every deploy.
+    """
+    return os.environ.get("SCRAPEWRIGHT_DB", "scrapewright_service.db")
 
 
 def main(argv: list[str] | None = None) -> int:

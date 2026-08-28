@@ -1,0 +1,49 @@
+# Fly.io deployment. Deliberately one machine, not a herd.
+#
+# The credit ledger is SQLite on a mounted volume, and SQLite has exactly one
+# writer. Two machines would mean two ledgers diverging, each certain it knew
+# a customer's balance. Horizontal scale here needs Postgres first, so the
+# config pins a single machine and says why.
+
+app = "scrapewright"
+primary_region = "mad"        # closest to Alicante; keeps latency honest
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # The Dockerfile sets this too; repeated here because this file is the thing
+  # people read when they wonder where the data lives.
+  SCRAPEWRIGHT_DB = "/data/service.db"
+  SCRAPEWRIGHT_OBEY_ROBOTS = "1"
+
+[mounts]
+  source = "scrapewright_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  # Never scale past one. See the note at the top.
+  auto_start_machines = true
+  min_machines_running = 1
+  max_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 40
+    hard_limit = 60
+
+# Stripe retries a failed webhook, but a cold start that times out still delays
+# a customer's credits, so the machine stays warm and is checked often.
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "15s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
