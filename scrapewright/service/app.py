@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -31,9 +32,17 @@ from .jobs import JobRegistry
 from .metering import metered_scrapewright
 
 log = logging.getLogger("scrapewright.service")
+
+# Deliberately loose: this is a contact address and a dedupe handle, not an
+# authentication factor. Rejecting valid-but-unusual addresses would cost more
+# than the little it would buy.
+EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# Enough for a developer trying the service from one office; not enough to farm
+# the free tier from one machine.
+MAX_SIGNUPS_PER_DAY = 3
 from .credits import (FREE_MONTHLY_CREDITS, PACKS, PACKS_BY_NAME,
                       credits_for, describe_costs)
-from .plans import get_tier
+from .plans import DEFAULT_TIER, get_tier
 from .pricing import value_of
 from .store import ApiKey, Store, Usage
 
@@ -59,6 +68,10 @@ class ExtractRequest(BaseModel):
 
 class CrawlRequest(ExtractRequest):
     max_items: int = 25
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(..., description="where to reach you about this key")
 
 
 class CheckoutRequest(BaseModel):
@@ -243,6 +256,45 @@ def create_app(store: Store | None = None,
                          for j in jobs.list_for(key.id)]}
 
     # ── buying credits ───────────────────────────────────────────────────────
+    @app.post("/v1/signup", status_code=status.HTTP_201_CREATED)
+    def signup_endpoint(req: SignupRequest, request: Request) -> dict[str, Any]:
+        """Take an email, hand back an API key. The door into the service.
+
+        Unauthenticated by necessity -- this is where a stranger becomes a
+        customer -- which makes the free allowance the thing to protect. Two
+        guards, neither of them proof on its own: the allowance is keyed to the
+        email rather than the key, so a second signup at the same address gets
+        nothing, and one address can only take a few keys a day.
+
+        Deliberately no email verification yet. It would be the honest third
+        guard, and it needs a mail sender this deployment does not have; until
+        then the endpoint is cheap to abuse and expensive to abuse *at scale*,
+        which is the trade being made knowingly.
+        """
+        email = req.email.strip()
+        if not EMAIL_RE.fullmatch(email):
+            raise HTTPException(400, "that does not look like an email address")
+
+        client_ip = request.client.host if request.client else "unknown"
+        if store.recent_signups(client_ip) >= MAX_SIGNUPS_PER_DAY:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                f"this address has taken {MAX_SIGNUPS_PER_DAY} keys today; "
+                f"write to the operator if you need more")
+
+        raw_key, key = store.create_key(label=email[:64], plan=DEFAULT_TIER,
+                                        email=email)
+        store.record_signup(client_ip)
+        store.ensure_free_allowance(key.id, FREE_MONTHLY_CREDITS)
+
+        return {
+            "api_key": raw_key,          # shown once; only its hash is kept
+            "key_id": key.id,
+            "credits": store.balance(key.id),
+            "note": ("Store this key now -- it cannot be shown again. "
+                     "Free credits are granted once per address per month."),
+        }
+
     @app.get("/v1/credits/packs")
     def packs_endpoint() -> dict[str, Any]:
         """The price list. Public: nobody should need a key to read prices."""

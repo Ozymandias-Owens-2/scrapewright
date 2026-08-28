@@ -20,7 +20,7 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 KEY_PREFIX = "sw_"
@@ -35,7 +35,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
     label       TEXT NOT NULL DEFAULT '',
     plan        TEXT NOT NULL DEFAULT 'free',
     created_at  TEXT NOT NULL,
-    revoked_at  TEXT
+    revoked_at  TEXT,
+    -- Hashed, not stored plainly: it exists to stop one person collecting the
+    -- free allowance over and over, not to build a mailing list. Stripe already
+    -- holds the payer's real address for receipts.
+    email_hash  TEXT
 );
 CREATE TABLE IF NOT EXISTS credit_ledger (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +62,12 @@ CREATE TABLE IF NOT EXISTS usage (
     records     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (key_id, day)
 );
+CREATE TABLE IF NOT EXISTS signups (
+    -- Hashed for the same reason as the email. Only the count matters.
+    ip_hash     TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS signups_ip ON signups (ip_hash);
 """
 
 
@@ -67,6 +77,12 @@ def _now() -> str:
 
 def hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def hash_identity(value: str) -> str:
+    """Hash an email or IP. Case- and whitespace-insensitive, so the same
+    person does not read as two."""
+    return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -121,6 +137,11 @@ class Store:
             conn.execute(
                 f"ALTER TABLE usage ADD COLUMN {meter} INTEGER NOT NULL DEFAULT 0")
 
+        key_columns = {row["name"]
+                       for row in conn.execute("PRAGMA table_info(api_keys)")}
+        if "email_hash" not in key_columns:
+            conn.execute("ALTER TABLE api_keys ADD COLUMN email_hash TEXT")
+
     @contextmanager
     def _conn(self):
         conn = sqlite3.connect(self.path)
@@ -132,17 +153,25 @@ class Store:
             conn.close()
 
     # ── keys ─────────────────────────────────────────────────────────────────
-    def create_key(self, label: str = "", plan: str = "free") -> tuple[str, ApiKey]:
+    def create_key(self, label: str = "", plan: str = "free",
+                   email: str | None = None) -> tuple[str, ApiKey]:
         """Mint a key. Returns ``(raw_key, record)`` — the raw key is the only
-        time the caller will ever see it."""
+        time the caller will ever see it.
+
+        ``email`` identifies the person behind the key. It is what stops the
+        free allowance from being farmed once anyone can sign up: the grant is
+        keyed to the identity, so a second key for the same address inherits
+        nothing.
+        """
         key_id = secrets.token_hex(4)
         raw_key = f"{KEY_PREFIX}{key_id}_{secrets.token_urlsafe(24)}"
         created = _now()
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO api_keys (id, key_hash, label, plan, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (key_id, hash_key(raw_key), label, plan, created),
+                "INSERT INTO api_keys (id, key_hash, label, plan, created_at, "
+                "email_hash) VALUES (?, ?, ?, ?, ?, ?)",
+                (key_id, hash_key(raw_key), label, plan, created,
+                 hash_identity(email) if email else None),
             )
         return raw_key, ApiKey(id=key_id, label=label, plan=plan, created_at=created)
 
@@ -235,10 +264,38 @@ class Store:
 
     def ensure_free_allowance(self, key_id: str, amount: int,
                               month: str | None = None) -> None:
-        """Hand out this month's free credits, once."""
+        """Hand out this month's free credits, once per person per month.
+
+        Keyed to the account's email where there is one, so minting a second
+        key does not mint a second allowance. Keys made by the operator have no
+        email and fall back to being their own identity -- that is deliberate:
+        the abuse this guards against is self-service signup, and an operator
+        with CLI access can grant themselves credits directly anyway.
+        """
         month = month or date.today().strftime("%Y-%m")
+        with self._conn() as conn:
+            row = conn.execute("SELECT email_hash FROM api_keys WHERE id = ?",
+                               (key_id,)).fetchone()
+        identity = (row["email_hash"] if row and row["email_hash"] else key_id)
         self.grant(key_id, amount, f"free allowance {month}",
-                   idempotency_key=f"free:{key_id}:{month}")
+                   idempotency_key=f"free:{identity}:{month}")
+
+    # ── signup rate limiting ─────────────────────────────────────────────────
+    def record_signup(self, ip: str) -> None:
+        with self._conn() as conn:
+            conn.execute("INSERT INTO signups (ip_hash, created_at) VALUES (?, ?)",
+                         (hash_identity(ip), _now()))
+
+    def recent_signups(self, ip: str, hours: int = 24) -> int:
+        """How many keys this address has taken lately."""
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(hours=hours)).isoformat(timespec="seconds")
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM signups "
+                "WHERE ip_hash = ? AND created_at >= ?",
+                (hash_identity(ip), cutoff)).fetchone()
+        return int(row["n"])
 
     def ledger(self, key_id: str, limit: int = 50) -> list[dict]:
         with self._conn() as conn:
