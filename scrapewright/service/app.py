@@ -15,6 +15,7 @@ a caller can never be charged for a request that was refused.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -28,6 +29,8 @@ from ..schema import PRODUCT_SCHEMA, Schema
 from .billing import BillingProvider, NoopBilling
 from .jobs import JobRegistry
 from .metering import metered_scrapewright
+
+log = logging.getLogger("scrapewright.service")
 from .credits import (FREE_MONTHLY_CREDITS, PACKS, PACKS_BY_NAME,
                       credits_for, describe_costs)
 from .plans import get_tier
@@ -286,7 +289,13 @@ def create_app(store: Store | None = None,
             return handler(body, stripe_signature, store)
         except Exception as e:
             if type(e).__name__ == "StripeWebhookError":
+                # Say why, in the log. A refusal is either someone probing the
+                # endpoint or the service quietly declining real payments, and
+                # the response body -- a 400 to Stripe -- is seen by nobody.
+                log.warning("refused a webhook: %s (signature header: %s)",
+                            e, "present" if stripe_signature else "MISSING")
                 raise HTTPException(400, str(e)) from e
+            log.exception("webhook could not be processed")
             raise HTTPException(503, f"webhook could not be processed: {e}") from e
 
     @app.get("/v1/usage")
