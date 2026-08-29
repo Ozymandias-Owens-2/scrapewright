@@ -105,9 +105,18 @@ def _default_billing() -> BillingProvider:
     """
     if not os.environ.get("STRIPE_SECRET_KEY"):
         return NoopBilling()
-    from .stripe_billing import StripeBilling
+    try:
+        from .stripe_billing import StripeBilling
 
-    return StripeBilling()
+        return StripeBilling()
+    except Exception as e:
+        # Loud, but not fatal. A service that cannot take new payments is
+        # wounded; one that will not boot is dead, and takes with it the
+        # customers who already paid for the credits in their balance.
+        # Selling stops, serving continues, and the log says which.
+        log.error("Stripe is configured but could not be initialised, so "
+                  "credits cannot be bought: %s", e)
+        return NoopBilling()
 
 
 # ── app factory ──────────────────────────────────────────────────────────────

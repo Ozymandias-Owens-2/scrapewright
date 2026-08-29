@@ -310,3 +310,32 @@ def test_a_deployment_without_stripe_says_so_plainly(tmp_path):
     with TestClient(app) as c:
         c.headers.update({"X-API-Key": raw})
         assert c.post("/v1/credits/checkout", json={"pack": "starter"}).status_code == 501
+
+
+def test_a_broken_stripe_setup_does_not_take_the_service_down(monkeypatch, tmp_path):
+    """Losing the ability to sell must not lose the ability to serve.
+
+    A deployment configured for Stripe whose SDK will not load used to raise
+    out of create_app, so the container crash-looped: existing customers lost
+    access to credits they had already paid for, over a problem that only
+    affects buying more. It now degrades to no-payments and says so loudly.
+    """
+    import sys
+
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
+    # None in sys.modules makes `import stripe` raise, exactly as a container
+    # built without the extra does.
+    monkeypatch.setitem(sys.modules, "stripe", None)
+    monkeypatch.delitem(sys.modules, "scrapewright.service.stripe_billing",
+                        raising=False)
+
+    store = Store(tmp_path / "degraded.db")
+    client = TestClient(create_app(store=store, jobs=JobRegistry()))
+
+    assert client.get("/health").status_code == 200
+
+    raw = store.create_key(label="alice", plan="metered")[0]
+    # Buying is refused in a way the caller can act on, not a crash.
+    r = client.post("/v1/credits/checkout", json={"pack": "starter"},
+                    headers={"X-API-Key": raw})
+    assert r.status_code == 501

@@ -12,7 +12,7 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY scrapewright ./scrapewright
 
-RUN pip install --no-cache-dir ".[service,llm,excel]" \
+RUN pip install --no-cache-dir ".[service,llm,excel,stripe,mcp]" \
  && if [ "$WITH_JS" = "1" ]; then \
       pip install --no-cache-dir ".[js]" && playwright install --with-deps chromium; \
     fi
