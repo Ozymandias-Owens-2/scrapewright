@@ -5,8 +5,8 @@
 # a customer's balance. Horizontal scale here needs Postgres first, so the
 # config pins a single machine and says why.
 
-app = "scrapewright"
-primary_region = "mad"        # closest to Alicante; keeps latency honest
+app = "scrapewright-api"
+primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
 
 [build]
   dockerfile = "Dockerfile"
