@@ -107,6 +107,35 @@ def test_checkout_prices_the_pack_from_our_own_list(billing, store):
     assert sent["metadata"]["pack"] == "growth"
 
 
+def test_checkout_declares_a_product_tax_code(billing, store):
+    """Managed Payments refuses a line item that will not say what it is.
+
+    Stripe is the merchant of record on this account, so it assesses VAT
+    itself. A session without a tax code is rejected outright -- the live run
+    failed here with "the product tax code is missing" before this was added.
+    """
+    _, key = store.create_key(label="alice")
+    billing.checkout_session(key, PACKS_BY_NAME["starter"])
+
+    sent = billing.stripe.created[-1]
+    tax_code = sent["line_items"][0]["price_data"]["product_data"]["tax_code"]
+    assert tax_code and tax_code.startswith("txcd_")
+
+
+def test_the_tax_code_can_be_set_per_deployment(store, monkeypatch):
+    """The default describes what we sell; a fork sells something else."""
+    monkeypatch.setenv("STRIPE_TAX_CODE", "txcd_00000000")
+    other = StripeBilling(secret_key="sk_test_x", webhook_secret="whsec_x",
+                          stripe=_FakeStripe())
+    _, key = store.create_key(label="alice")
+
+    other.checkout_session(key, PACKS_BY_NAME["starter"])
+
+    sent = other.stripe.created[-1]
+    product = sent["line_items"][0]["price_data"]["product_data"]
+    assert product["tax_code"] == "txcd_00000000"
+
+
 def test_checkout_without_a_key_configured_is_refused(store):
     b = StripeBilling(secret_key=None, webhook_secret="whsec_x", stripe=_FakeStripe())
     _, key = store.create_key()

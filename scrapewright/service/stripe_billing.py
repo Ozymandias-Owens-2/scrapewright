@@ -38,6 +38,13 @@ from .store import ApiKey, Store
 # is how an integration double-credits itself.
 PAID_EVENT = "checkout.session.completed"
 
+# Managed Payments makes Stripe the merchant of record, so Stripe assesses VAT
+# per jurisdiction itself -- and it rejects a line item that does not say what
+# kind of product it is. This default describes what scrapewright sells; anyone
+# selling something else must override it, via ``STRIPE_TAX_CODE`` or the
+# constructor. ``examples/list_tax_codes.py`` finds the right code.
+DEFAULT_TAX_CODE = "txcd_10103001"  # software as a service, business use
+
 
 def _plain(value: Any) -> Any:
     """Flatten Stripe's response objects into ordinary dicts and lists.
@@ -84,12 +91,15 @@ class StripeBilling:
     success_url: str = "https://github.com/Ozymandias-Owens-2/scrapewright"
     cancel_url: str = "https://github.com/Ozymandias-Owens-2/scrapewright"
     currency: str = "usd"
+    tax_code: str | None = None
     stripe: Any = None
 
     def __post_init__(self) -> None:
         self.secret_key = self.secret_key or os.environ.get("STRIPE_SECRET_KEY")
         self.webhook_secret = (self.webhook_secret
                                or os.environ.get("STRIPE_WEBHOOK_SECRET"))
+        self.tax_code = (self.tax_code or os.environ.get("STRIPE_TAX_CODE")
+                         or DEFAULT_TAX_CODE)
         if self.stripe is None:
             try:
                 import stripe as stripe_module
@@ -137,6 +147,7 @@ class StripeBilling:
                         "name": f"scrapewright — {pack.credits:,} credits",
                         "description": (f"{pack.name} pack. Credits never expire "
                                         f"and are spent per record delivered."),
+                        "tax_code": self.tax_code,
                     },
                 },
             }],
