@@ -27,3 +27,4 @@ promo/
 # local service databases
 *.db
 smoke.db
+.claude/

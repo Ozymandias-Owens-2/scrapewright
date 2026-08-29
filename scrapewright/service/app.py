@@ -18,13 +18,16 @@ from __future__ import annotations
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..detect import detect
+from ..pipeline import Scrapewright
 from ..models import Record
 from ..schema import PRODUCT_SCHEMA, Schema
 from .billing import BillingProvider, NoopBilling
@@ -32,6 +35,7 @@ from .jobs import JobRegistry
 from .metering import metered_scrapewright
 
 log = logging.getLogger("scrapewright.service")
+STATIC = Path(__file__).parent / "static"
 
 # Deliberately loose: this is a contact address and a dedupe handle, not an
 # authentication factor. Rejecting valid-but-unusual addresses would cost more
@@ -40,6 +44,10 @@ EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 # Enough for a developer trying the service from one office; not enough to farm
 # the free tier from one machine.
 MAX_SIGNUPS_PER_DAY = 3
+# The public demo runs without a key, so it has to be free for us to serve:
+# it only accepts sites with a catalogue API, where no model is ever called.
+MAX_DEMOS_PER_DAY = 5
+DEMO_MAX_RECORDS = 5
 from .credits import (FREE_MONTHLY_CREDITS, PACKS, PACKS_BY_NAME,
                       credits_for, describe_costs)
 from .plans import DEFAULT_TIER, get_tier
@@ -164,6 +172,11 @@ def create_app(store: Store | None = None,
         return spent
 
     # ── endpoints ────────────────────────────────────────────────────────────
+    @app.get("/", include_in_schema=False)
+    def landing() -> FileResponse:
+        """The page a human lands on. Everything else here answers to machines."""
+        return FileResponse(STATIC / "index.html", media_type="text/html")
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"ok": True, "version": __version__}
@@ -256,6 +269,54 @@ def create_app(store: Store | None = None,
                          for j in jobs.list_for(key.id)]}
 
     # ── buying credits ───────────────────────────────────────────────────────
+    @app.post("/v1/demo")
+    def demo_endpoint(req: DetectRequest, request: Request) -> dict[str, Any]:
+        """Paste a URL, see real rows. No key, no signup, no card.
+
+        Deliberately narrow, because it is unauthenticated. It runs only where
+        the platform hands us a catalogue -- Shopify, WooCommerce -- so serving
+        it costs a couple of HTTP requests and never a model call. Sites that
+        would need compiling are turned away with an explanation rather than
+        quietly billed to the operator.
+        """
+        client_ip = request.client.host if request.client else "unknown"
+        if store.count_events(client_ip, "demo") >= MAX_DEMOS_PER_DAY:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "the demo is limited to a few runs a day; a free key lifts that")
+
+        det = detect(req.url)
+        if det.kind in ("blocked",):
+            raise HTTPException(422, "that site refuses automated visitors "
+                                     "(it answered with a block)")
+        if det.strategy != "catalog":
+            raise HTTPException(
+                422, f"the demo only covers sites with a catalogue API "
+                     f"(Shopify, WooCommerce). This one looks like "
+                     f"'{det.kind}', which has to be compiled first -- that is "
+                     f"what a free key is for.")
+
+        store.record_event(client_ip, "demo")
+        # Not metered and not billed: nobody is paying, so nothing is counted.
+        # allow_llm=False is belt and braces -- the catalogue path never
+        # synthesises, and this makes it impossible for a change to that to
+        # quietly start spending money on an endpoint with no key.
+        sw = Scrapewright()
+        try:
+            records = [r.model_dump() for _, r in
+                       zip(range(DEMO_MAX_RECORDS),
+                           sw.crawl_records(req.url, max_items=DEMO_MAX_RECORDS,
+                                            allow_llm=False))]
+        except Exception as e:
+            log.warning("demo failed for %s: %s", req.url, e)
+            raise HTTPException(502, "could not read that site just now") from e
+        finally:
+            sw.close()
+
+        return {"platform": det.kind, "count": len(records), "records": records,
+                "note": f"The demo stops at {DEMO_MAX_RECORDS} rows. "
+                        f"A free key gives you 1,000."}
+
     @app.post("/v1/signup", status_code=status.HTTP_201_CREATED)
     def signup_endpoint(req: SignupRequest, request: Request) -> dict[str, Any]:
         """Take an email, hand back an API key. The door into the service.

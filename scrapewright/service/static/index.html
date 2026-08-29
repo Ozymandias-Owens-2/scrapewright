@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scrapewright — give it a URL, it writes the scraper</title>
+<meta name="description" content="An LLM compiles a scraper for a site once. Every page after that replays for free. Structured rows from any shop, no API required.">
+<style>
+:root {
+  --bg:        #FAF6F0;
+  --paper:     #FFFDFA;
+  --ink:       #322E29;
+  --ink-soft:  #736A5F;
+  --line:      #EBE2D6;
+  --clay:      #A8624A;
+  --clay-soft: #F2E5DE;
+  --sage:      #7C8C6F;
+  --sage-soft: #E9EDE4;
+  --radius:    14px;
+  --shadow:    0 1px 2px rgba(50,46,41,.04), 0 8px 24px rgba(50,46,41,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #221F1C;
+    --paper:     #2A2622;
+    --ink:       #EDE6DC;
+    --ink-soft:  #A79C8E;
+    --line:      #3A342E;
+    --clay:      #D08A6E;
+    --clay-soft: #3A2C25;
+    --sage:      #9FB08F;
+    --sage-soft: #2C332A;
+    --shadow:    0 1px 2px rgba(0,0,0,.2), 0 8px 24px rgba(0,0,0,.18);
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: .002em;
+}
+h1, h2, h3 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-weight: 600;
+  letter-spacing: -.012em;
+  line-height: 1.2;
+  margin: 0 0 .5em;
+}
+h1 { font-size: clamp(2.1rem, 5.4vw, 3.1rem); }
+h2 { font-size: clamp(1.4rem, 3.2vw, 1.8rem); margin-top: 0; }
+p  { margin: 0 0 1em; }
+a  { color: var(--clay); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+.wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+section { padding: clamp(48px, 8vw, 84px) 0; }
+section + section { border-top: 1px solid var(--line); }
+
+/* ── hero ─────────────────────────────────────────────────────────────── */
+.hero { padding-top: clamp(56px, 10vw, 104px); }
+.mark {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-family: "Iowan Old Style", Palatino, Georgia, serif;
+  font-size: 1.05rem; color: var(--ink-soft); margin-bottom: 28px;
+}
+.mark .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--clay); opacity: .8;
+}
+.lede { font-size: 1.16rem; color: var(--ink-soft); max-width: 34em; }
+.lede strong { color: var(--ink); font-weight: 600; }
+
+/* ── demo ─────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: clamp(20px, 3.5vw, 28px);
+}
+.demo-row { display: flex; gap: 10px; flex-wrap: wrap; }
+input[type=url], input[type=email] {
+  flex: 1 1 260px; min-width: 0;
+  padding: 12px 15px;
+  font: inherit; font-size: .97rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+input:focus {
+  outline: none;
+  border-color: var(--clay);
+  box-shadow: 0 0 0 3px var(--clay-soft);
+}
+button {
+  padding: 12px 22px;
+  font: inherit; font-weight: 550; font-size: .97rem;
+  color: #FFFDFA;
+  background: var(--clay);
+  border: none; border-radius: 10px;
+  cursor: pointer;
+  transition: opacity .15s ease, transform .08s ease;
+}
+button:hover  { opacity: .9; }
+button:active { transform: translateY(1px); }
+button[disabled] { opacity: .5; cursor: default; transform: none; }
+.hint { font-size: .88rem; color: var(--ink-soft); margin: 12px 0 0; }
+.examples { font-size: .88rem; color: var(--ink-soft); margin: 12px 0 0; }
+.examples button {
+  background: none; color: var(--clay); padding: 0 2px;
+  font-size: inherit; font-weight: 500;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+
+.result { margin-top: 20px; }
+.tablewrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--line); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--line); }
+th { background: var(--sage-soft); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.msg { padding: 13px 15px; border-radius: 10px; font-size: .92rem; }
+.msg.warn { background: var(--clay-soft); color: var(--ink); }
+.msg.ok   { background: var(--sage-soft); color: var(--ink); }
+
+/* ── steps ────────────────────────────────────────────────────────────── */
+.steps { display: grid; gap: 18px; margin-top: 26px; }
+@media (min-width: 620px) { .steps { grid-template-columns: repeat(3, 1fr); } }
+.step h3 { font-size: 1.03rem; margin-bottom: .35em; }
+.step p  { font-size: .93rem; color: var(--ink-soft); margin: 0; }
+.step .n {
+  display: inline-grid; place-items: center;
+  width: 26px; height: 26px; margin-bottom: 12px;
+  border-radius: 50%;
+  background: var(--sage-soft); color: var(--sage);
+  font-size: .82rem; font-weight: 650;
+}
+
+/* ── pricing ──────────────────────────────────────────────────────────── */
+.packs { display: grid; gap: 14px; margin-top: 24px; }
+@media (min-width: 620px) { .packs { grid-template-columns: repeat(3, 1fr); } }
+.pack { text-align: center; padding: 22px 16px; }
+.pack .price {
+  font-family: "Iowan Old Style", Palatino, Georgia, serif;
+  font-size: 1.9rem; display: block; margin-bottom: 2px;
+}
+.pack .credits { font-size: .93rem; color: var(--ink-soft); }
+.pack .name {
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--sage); font-weight: 650; margin-bottom: 10px;
+}
+
+/* ── code ─────────────────────────────────────────────────────────────── */
+pre {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  font: .87rem/1.6 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--ink);
+  margin: 0 0 16px;
+}
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+
+footer {
+  padding: 40px 0 56px;
+  border-top: 1px solid var(--line);
+  font-size: .89rem; color: var(--ink-soft);
+}
+footer a { color: var(--ink-soft); }
+.keybox { margin-top: 16px; }
+.keybox code {
+  display: block; padding: 12px 14px; margin-top: 8px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 9px;
+  word-break: break-all; font-size: .85rem;
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<section class="hero">
+  <div class="mark"><span class="dot"></span> scrapewright</div>
+  <h1>Give it a URL.<br>It writes the scraper.</h1>
+  <p class="lede">Most tools charge you per page, forever. scrapewright works out how
+  to read a site <strong>once</strong> — then replays that recipe on every page after,
+  with no model in the loop and nothing more to pay for it.</p>
+</section>
+
+<section>
+  <h2>Try it on a real shop</h2>
+  <p class="lede">No signup, no card. Paste a shop URL and see actual rows.</p>
+
+  <div class="card">
+    <form class="demo-row" id="demo-form">
+      <input type="url" id="demo-url" placeholder="https://someshop.com" required
+             autocomplete="off" spellcheck="false">
+      <button type="submit" id="demo-go">Read it</button>
+    </form>
+    <p class="examples">Try
+      <button type="button" data-url="https://www.isaacsellam.com">isaacsellam.com</button> ·
+      <button type="button" data-url="https://asphalt-nyc.com">asphalt-nyc.com</button>
+    </p>
+    <div class="result" id="demo-result" hidden></div>
+  </div>
+  <p class="hint">The demo covers shops that publish a catalogue (Shopify, WooCommerce),
+  because those cost nothing to read. Everything else needs compiling once — that is
+  what a free key is for.</p>
+</section>
+
+<section>
+  <h2>Why it stays cheap</h2>
+  <p class="lede">The expensive part of scraping is not fetching pages. It is working out
+  where the title and the price live on a page nobody has parsed before.</p>
+  <div class="steps">
+    <div class="step">
+      <span class="n">1</span>
+      <h3>Recognise</h3>
+      <p>Shopify, WooCommerce and a dozen more are detected outright. They already hand
+      over a catalogue, so no model is ever called.</p>
+    </div>
+    <div class="step">
+      <span class="n">2</span>
+      <h3>Compile</h3>
+      <p>For anything custom, a language model reads the page once and writes a recipe
+      of CSS selectors. This is the only step that costs real money.</p>
+    </div>
+    <div class="step">
+      <span class="n">3</span>
+      <h3>Replay</h3>
+      <p>Every page after that runs the cached recipe. Plain parsing, no model, no
+      marginal cost. If the site changes, the recipe rebuilds itself.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Pricing</h2>
+  <p class="lede">You pay for <strong>rows delivered</strong> — one credit each. Not for
+  requests, not per month. Credits do not expire, and there is no subscription.</p>
+  <div class="packs" id="packs">
+    <div class="card pack"><div class="name">Starter</div>
+      <span class="price">$10</span><span class="credits">10,000 rows</span></div>
+    <div class="card pack"><div class="name">Growth</div>
+      <span class="price">$40</span><span class="credits">50,000 rows</span></div>
+    <div class="card pack"><div class="name">Scale</div>
+      <span class="price">$150</span><span class="credits">250,000 rows</span></div>
+  </div>
+  <p class="hint">Every account gets 1,000 rows free each month. Rendering a
+  JavaScript-only page costs 5, and compiling a brand-new site costs 300 — both are
+  shown in your usage before you spend them.</p>
+</section>
+
+<section>
+  <h2>Get a key</h2>
+  <p class="lede">One field. The key appears once, so keep it somewhere.</p>
+  <div class="card">
+    <form class="demo-row" id="signup-form">
+      <input type="email" id="signup-email" placeholder="you@example.com" required
+             autocomplete="email">
+      <button type="submit" id="signup-go">Get 1,000 free rows</button>
+    </form>
+    <div class="keybox" id="signup-result" hidden></div>
+  </div>
+</section>
+
+<section>
+  <h2>Using it</h2>
+  <p class="lede">An HTTP API, a Python library, and an MCP server for agents.</p>
+
+  <h3>HTTP</h3>
+<pre>curl -X POST https://scrapewright-api.fly.dev/v1/crawl \
+  -H "X-API-Key: $SCRAPEWRIGHT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://someshop.com", "max_items": 100}'</pre>
+
+  <h3>Python</h3>
+<pre>pip install "scrapewright[llm,excel]"
+
+from scrapewright import Scrapewright
+sw = Scrapewright()
+for product in sw.scrape_catalog("https://someshop.com"):
+    print(product.title, product.price)</pre>
+
+  <h3>As a tool for your agent</h3>
+<pre>{
+  "mcpServers": {
+    "scrapewright": {
+      "command": "scrapewright",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+  <p class="hint">Drop that into your MCP client's config and the agent gets
+  <code>detect_site</code>, <code>extract</code> and <code>crawl</code> as tools.</p>
+</section>
+
+<footer>
+  <p>scrapewright is open source under the MIT licence —
+  <a href="https://github.com/Ozymandias-Owens-2/scrapewright">source on GitHub</a> ·
+  <a href="https://pypi.org/project/scrapewright/">PyPI</a></p>
+  <p>It identifies itself honestly to every site it visits and obeys robots.txt.
+  Built and run by Fedor Dyatlov.</p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  const form   = document.getElementById('demo-form');
+  const input  = document.getElementById('demo-url');
+  const button = document.getElementById('demo-go');
+  const out    = document.getElementById('demo-result');
+
+  document.querySelectorAll('.examples button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      input.value = b.dataset.url;
+      form.requestSubmit();
+    });
+  });
+
+  function show(html) { out.hidden = false; out.innerHTML = html; }
+  function escape(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    button.disabled = true;
+    button.textContent = 'Reading…';
+    show('<div class="msg ok">Looking at the site…</div>');
+
+    try {
+      const r = await fetch('/v1/demo', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url: input.value})
+      });
+      const body = await r.json();
+
+      if (!r.ok) {
+        show('<div class="msg warn">' + escape(body.detail || 'That did not work.') + '</div>');
+      } else if (!body.count) {
+        show('<div class="msg warn">Nothing came back from that URL. ' +
+             'Try a category or collection page.</div>');
+      } else {
+        const rows = body.records.map(function (rec) {
+          const d = rec.data || {};
+          return '<tr><td>' + escape(d.title) + '</td>' +
+                 '<td class="num">' + escape(d.price) + '</td>' +
+                 '<td>' + escape(d.brand) + '</td></tr>';
+        }).join('');
+        show('<div class="tablewrap"><table><thead><tr>' +
+             '<th>Title</th><th class="num">Price</th><th>Brand</th>' +
+             '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+             '<p class="hint">' + escape(body.note) + '</p>');
+      }
+    } catch (err) {
+      show('<div class="msg warn">Could not reach the service. Try again in a moment.</div>');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Read it';
+    }
+  });
+
+  // ── signup ──────────────────────────────────────────────────────────────
+  const sForm   = document.getElementById('signup-form');
+  const sEmail  = document.getElementById('signup-email');
+  const sButton = document.getElementById('signup-go');
+  const sOut    = document.getElementById('signup-result');
+
+  sForm.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    sButton.disabled = true;
+    sButton.textContent = 'Making it…';
+    try {
+      const r = await fetch('/v1/signup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email: sEmail.value})
+      });
+      const body = await r.json();
+      sOut.hidden = false;
+      if (!r.ok) {
+        sOut.innerHTML = '<div class="msg warn">' +
+          escape(body.detail || 'That did not work.') + '</div>';
+      } else {
+        sOut.innerHTML = '<div class="msg ok">Your key — it will not be shown again.' +
+          '</div><code>' + escape(body.api_key) + '</code>' +
+          '<p class="hint">' + escape(body.credits) +
+          ' rows of credit are on it already.</p>';
+      }
+    } catch (err) {
+      sOut.hidden = false;
+      sOut.innerHTML = '<div class="msg warn">Could not reach the service.</div>';
+    } finally {
+      sButton.disabled = false;
+      sButton.textContent = 'Get 1,000 free rows';
+    }
+  });
+})();
+</script>
+</body>
+</html>

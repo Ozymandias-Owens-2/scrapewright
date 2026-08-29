@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE TABLE IF NOT EXISTS signups (
     -- Hashed for the same reason as the email. Only the count matters.
     ip_hash     TEXT NOT NULL,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    -- What the address did: took a key, ran the public demo, ...
+    kind        TEXT NOT NULL DEFAULT 'signup'
 );
 CREATE INDEX IF NOT EXISTS signups_ip ON signups (ip_hash);
 """
@@ -141,6 +143,12 @@ class Store:
                        for row in conn.execute("PRAGMA table_info(api_keys)")}
         if "email_hash" not in key_columns:
             conn.execute("ALTER TABLE api_keys ADD COLUMN email_hash TEXT")
+
+        signup_columns = {row["name"]
+                          for row in conn.execute("PRAGMA table_info(signups)")}
+        if signup_columns and "kind" not in signup_columns:
+            conn.execute("ALTER TABLE signups ADD COLUMN kind TEXT NOT NULL "
+                         "DEFAULT 'signup'")
 
     @contextmanager
     def _conn(self):
@@ -280,22 +288,29 @@ class Store:
         self.grant(key_id, amount, f"free allowance {month}",
                    idempotency_key=f"free:{identity}:{month}")
 
-    # ── signup rate limiting ─────────────────────────────────────────────────
-    def record_signup(self, ip: str) -> None:
+    # ── rate limiting for the unauthenticated endpoints ──────────────────────
+    def record_event(self, ip: str, kind: str = "signup") -> None:
         with self._conn() as conn:
-            conn.execute("INSERT INTO signups (ip_hash, created_at) VALUES (?, ?)",
-                         (hash_identity(ip), _now()))
+            conn.execute("INSERT INTO signups (ip_hash, created_at, kind) "
+                         "VALUES (?, ?, ?)", (hash_identity(ip), _now(), kind))
 
-    def recent_signups(self, ip: str, hours: int = 24) -> int:
-        """How many keys this address has taken lately."""
+    def count_events(self, ip: str, kind: str = "signup", hours: int = 24) -> int:
+        """How often this address has done ``kind`` lately."""
         cutoff = (datetime.now(timezone.utc)
                   - timedelta(hours=hours)).isoformat(timespec="seconds")
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS n FROM signups "
-                "WHERE ip_hash = ? AND created_at >= ?",
-                (hash_identity(ip), cutoff)).fetchone()
+                "WHERE ip_hash = ? AND kind = ? AND created_at >= ?",
+                (hash_identity(ip), kind, cutoff)).fetchone()
         return int(row["n"])
+
+    # Kept: signup was the first thing that needed counting, and callers exist.
+    def record_signup(self, ip: str) -> None:
+        self.record_event(ip, "signup")
+
+    def recent_signups(self, ip: str, hours: int = 24) -> int:
+        return self.count_events(ip, "signup", hours)
 
     def ledger(self, key_id: str, limit: int = 50) -> list[dict]:
         with self._conn() as conn:
