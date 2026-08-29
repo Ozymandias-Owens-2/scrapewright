@@ -45,6 +45,9 @@ PAID_EVENT = "checkout.session.completed"
 # constructor. ``examples/list_tax_codes.py`` finds the right code.
 DEFAULT_TAX_CODE = "txcd_10103001"  # software as a service, business use
 
+# Overridden with PUBLIC_BASE_URL wherever this is deployed.
+DEFAULT_SITE = "https://scrapewright-api.fly.dev"
+
 
 def _plain(value: Any) -> Any:
     """Flatten Stripe's response objects into ordinary dicts and lists.
@@ -88,8 +91,8 @@ class StripeBilling:
 
     secret_key: str | None = None
     webhook_secret: str | None = None
-    success_url: str = "https://github.com/Ozymandias-Owens-2/scrapewright"
-    cancel_url: str = "https://github.com/Ozymandias-Owens-2/scrapewright"
+    success_url: str | None = None
+    cancel_url: str | None = None
     currency: str = "usd"
     tax_code: str | None = None
     stripe: Any = None
@@ -100,6 +103,12 @@ class StripeBilling:
                                or os.environ.get("STRIPE_WEBHOOK_SECRET"))
         self.tax_code = (self.tax_code or os.environ.get("STRIPE_TAX_CODE")
                          or DEFAULT_TAX_CODE)
+        # Where Stripe sends the customer afterwards. Defaulting to the repo
+        # meant someone who had just paid landed on a page of source code with
+        # no sign the purchase worked.
+        site = os.environ.get("PUBLIC_BASE_URL", DEFAULT_SITE).rstrip("/")
+        self.success_url = self.success_url or f"{site}/?paid=1"
+        self.cancel_url = self.cancel_url or f"{site}/?paid=0"
         if self.stripe is None:
             try:
                 import stripe as stripe_module
