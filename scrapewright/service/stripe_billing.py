@@ -27,7 +27,7 @@ money that actually moved.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .credits import PACKS_BY_NAME, CreditPack
@@ -78,6 +78,25 @@ class StripeConfigError(RuntimeError):
 
 class StripeWebhookError(RuntimeError):
     """Raised when a webhook cannot be trusted. Answer these with a 400."""
+
+
+@dataclass
+class ReconcileResult:
+    """What a reconciliation found. Every payment lands in exactly one list."""
+
+    applied: list = field(default_factory=list)    # credited now
+    already: list = field(default_factory=list)    # the ledger already had it
+    orphaned: list = field(default_factory=list)   # paid, but no such account
+    ignored: list = field(default_factory=list)    # not a paid pack of ours
+
+    @property
+    def credits_applied(self) -> int:
+        return sum(row["credits"] for row in self.applied)
+
+    def __str__(self) -> str:
+        return (f"{len(self.applied)} applied ({self.credits_applied:,} credits), "
+                f"{len(self.already)} already present, "
+                f"{len(self.orphaned)} orphaned, {len(self.ignored)} ignored")
 
 
 @dataclass
@@ -217,3 +236,64 @@ class StripeBilling:
         return {"granted": applied, "credits": pack.credits if applied else 0,
                 "key_id": key_id, "pack": pack.name, "session": session_id,
                 "balance": store.balance(key_id)}
+
+    # ── rebuilding the ledger ────────────────────────────────────────────────
+    def reconcile(self, store: Store, *, since: int | None = None,
+                  limit: int = 100, dry_run: bool = False) -> ReconcileResult:
+        """Re-apply paid Checkout sessions that the ledger is missing.
+
+        Stripe is the second source of truth for money, and the more durable
+        one: it remembers every payment whether or not our disk survived. Each
+        session carries the account and the pack in its metadata, and grants are
+        idempotent on the session id -- the same key the webhook uses -- so
+        running this twice cannot credit anything twice. That turns a lost
+        volume from a catastrophe into a command.
+
+        A payment whose account no longer exists is reported, never granted: a
+        grant to a missing key is a row nobody can spend and a number that
+        quietly stops adding up.
+        """
+        if not self.secret_key:
+            raise StripeConfigError(
+                "STRIPE_SECRET_KEY is not set; nothing to reconcile against")
+
+        params: dict[str, Any] = {"limit": min(limit, 100)}
+        if since is not None:
+            params["created"] = {"gte": since}
+
+        result = ReconcileResult()
+        listing = self.stripe.checkout.Session.list(**params)
+        sessions = (listing.auto_paging_iter()
+                    if hasattr(listing, "auto_paging_iter") else listing["data"])
+
+        for raw in sessions:
+            session = _plain(raw)
+            session_id = session.get("id")
+            metadata = session.get("metadata") or {}
+            pack = PACKS_BY_NAME.get(metadata.get("pack") or "")
+            key_id = metadata.get("key_id")
+
+            if session.get("payment_status") != "paid" or pack is None or not key_id:
+                result.ignored.append({"session": session_id,
+                                       "why": "unpaid or not one of our packs"})
+                continue
+
+            row = {"session": session_id, "key_id": key_id,
+                   "pack": pack.name, "credits": pack.credits}
+
+            if not store.key_exists(key_id):
+                result.orphaned.append(row)
+                continue
+
+            if dry_run:
+                seen = store.grant_exists(f"stripe:{session_id}")
+                (result.already if seen else result.applied).append(row)
+                continue
+
+            applied = store.grant(
+                key_id, pack.credits,
+                f"stripe: {pack.name} pack (${pack.price_usd})",
+                idempotency_key=f"stripe:{session_id}")
+            (result.applied if applied else result.already).append(row)
+
+        return result

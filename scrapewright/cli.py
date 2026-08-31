@@ -204,6 +204,9 @@ def cmd_credits(args) -> int:
     from .service.store import Store
 
     store = Store(args.db)
+    if args.action in ("grant", "balance") and not args.key_id:
+        print(f"{args.action} needs a key id", file=sys.stderr)
+        return 1
     if args.action == "grant":
         amount = args.amount
         reason = args.reason or "manual grant"
@@ -228,6 +231,32 @@ def cmd_credits(args) -> int:
             print(f"already applied: {args.idempotency!r} was granted before, "
                   f"nothing added")
         print(f"balance now {store.balance(args.key_id):,}")
+    elif args.action == "reconcile":
+        import time
+
+        from .service.stripe_billing import StripeBilling
+
+        since = (int(time.time()) - args.since_days * 86400
+                 if args.since_days else None)
+        try:
+            result = StripeBilling().reconcile(store, since=since,
+                                               dry_run=args.dry_run)
+        except Exception as e:
+            print(f"could not reconcile: {e}", file=sys.stderr)
+            return 1
+
+        print(("would apply: " if args.dry_run else "") + str(result))
+        for row in result.applied:
+            print(f"  + {row['credits']:>7,} to {row['key_id']}  "
+                  f"({row['pack']}, {row['session']})")
+        for row in result.orphaned:
+            # Loud, because this is money received for an account that is gone.
+            print(f"  ! ORPHANED {row['credits']:,} credits: no key {row['key_id']} "
+                  f"({row['session']})", file=sys.stderr)
+        if result.orphaned:
+            print(f"{len(result.orphaned)} payment(s) have no account to "
+                  f"credit. Recreate the key with that id, or refund in Stripe.",
+                  file=sys.stderr)
     elif args.action == "balance":
         balance = store.balance(args.key_id)
         print(f"{args.key_id}: {balance:,} credits (~${value_of(balance):.2f})")
@@ -313,8 +342,9 @@ def build_parser() -> argparse.ArgumentParser:
     pl.set_defaults(func=cmd_plans)
 
     cr = sub.add_parser("credits", help="Grant credits or read a balance")
-    cr.add_argument("action", choices=["grant", "balance"])
-    cr.add_argument("key_id")
+    cr.add_argument("action", choices=["grant", "balance", "reconcile"])
+    cr.add_argument("key_id", nargs="?", default=None,
+                    help="not needed for: reconcile")
     cr.add_argument("--amount", type=int, default=0, help="credits to grant")
     cr.add_argument("--pack", default=None,
                     help="grant a whole pack: starter | growth | scale")
@@ -322,6 +352,10 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--idempotency", default=None,
                     help="payment id, so a replayed webhook cannot double-credit")
     cr.add_argument("--limit", type=int, default=10, help="ledger lines to show")
+    cr.add_argument("--since-days", type=int, default=None,
+                    help="reconcile: how far back to look (default: all)")
+    cr.add_argument("--dry-run", action="store_true",
+                    help="reconcile: report without granting")
     cr.add_argument("--db", default=_default_db())
     cr.set_defaults(func=cmd_credits)
 

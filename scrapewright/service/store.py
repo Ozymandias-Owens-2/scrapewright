@@ -196,6 +196,13 @@ class Store:
         return ApiKey(id=row["id"], label=row["label"], plan=row["plan"],
                       created_at=row["created_at"], revoked_at=row["revoked_at"])
 
+    def key_exists(self, key_id: str) -> bool:
+        """Is there an account to credit? Reconciliation needs to know before
+        it writes a grant nobody can ever spend."""
+        with self._conn() as conn:
+            return conn.execute("SELECT 1 FROM api_keys WHERE id = ?",
+                                (key_id,)).fetchone() is not None
+
     def revoke(self, key_id: str) -> bool:
         with self._conn() as conn:
             cur = conn.execute(
@@ -311,6 +318,18 @@ class Store:
 
     def recent_signups(self, ip: str, hours: int = 24) -> int:
         return self.count_events(ip, "signup", hours)
+
+    def grant_exists(self, idempotency_key: str) -> bool:
+        """Has this exact payment already been credited?
+
+        Exact, not a guess by description: two payments for the same pack read
+        identically, and a dry run that confounds them would tell an operator
+        the ledger is whole when it is missing money.
+        """
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT 1 FROM credit_ledger WHERE idempotency_key = ?",
+                (idempotency_key,)).fetchone() is not None
 
     def ledger(self, key_id: str, limit: int = 50) -> list[dict]:
         with self._conn() as conn:
