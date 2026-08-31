@@ -15,6 +15,9 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
   # The Dockerfile sets this too; repeated here because this file is the thing
   # people read when they wonder where the data lives.
   SCRAPEWRIGHT_DB = "/data/service.db"
+  # On the volume, not in the container: a recipe thrown away on
+  # deploy costs real money to work out again.
+  SCRAPEWRIGHT_CACHE = "/data/recipes.json"
   SCRAPEWRIGHT_OBEY_ROBOTS = "1"
 
 [mounts]

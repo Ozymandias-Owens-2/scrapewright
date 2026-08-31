@@ -6,7 +6,8 @@ FROM python:3.12-slim
 ARG WITH_JS=0
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    SCRAPEWRIGHT_DB=/data/scrapewright_service.db
+    SCRAPEWRIGHT_DB=/data/scrapewright_service.db \
+    SCRAPEWRIGHT_CACHE=/data/recipes.json
 
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./

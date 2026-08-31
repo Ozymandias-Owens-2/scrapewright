@@ -13,12 +13,27 @@ written by earlier versions keep loading unchanged.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .extract.base import SelectorRecipe
 
 DEFAULT_SCHEMA_NAME = "product"
+
+
+def default_cache_path() -> Path:
+    """Where compiled recipes live.
+
+    Configurable because the default -- the user's home directory -- is
+    ephemeral inside a container. A deployment that leaves it there throws away
+    every compiled recipe on each release and pays the model to work the same
+    sites out again, which is exactly the cost this cache exists to avoid.
+    """
+    configured = os.environ.get("SCRAPEWRIGHT_CACHE")
+    if configured:
+        return Path(configured)
+    return Path.home() / ".scrapewright" / "recipes.json"
 
 
 def domain_of(url: str) -> str:
@@ -35,8 +50,7 @@ class RecipeCache:
     """A tiny JSON-backed store of ``{key: SelectorRecipe}``."""
 
     def __init__(self, path: str | Path | None = None):
-        default = Path.home() / ".scrapewright" / "recipes.json"
-        self.path = Path(path) if path else default
+        self.path = Path(path) if path else default_cache_path()
 
     def _load_raw(self) -> dict:
         if not self.path.exists():

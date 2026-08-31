@@ -40,3 +40,28 @@ def test_coverage_ratio():
 def test_coverage_empty():
     cov = coverage([])
     assert cov.usable_ratio == 0.0
+
+
+def test_the_cache_location_can_be_moved_out_of_home(tmp_path, monkeypatch):
+    """A container's home directory is thrown away on every release.
+
+    Leaving the cache there means each deploy silently discards every compiled
+    recipe and pays the model to work the same sites out again -- the exact cost
+    this cache exists to prevent.
+    """
+    from scrapewright.cache import RecipeCache, default_cache_path
+
+    monkeypatch.setenv("SCRAPEWRIGHT_CACHE", str(tmp_path / "recipes.json"))
+
+    assert default_cache_path() == tmp_path / "recipes.json"
+    assert RecipeCache().path == tmp_path / "recipes.json"
+
+
+def test_without_the_variable_the_cache_stays_in_home(monkeypatch):
+    from pathlib import Path
+
+    from scrapewright.cache import default_cache_path
+
+    monkeypatch.delenv("SCRAPEWRIGHT_CACHE", raising=False)
+
+    assert default_cache_path() == Path.home() / ".scrapewright" / "recipes.json"

@@ -220,6 +220,45 @@ footer a { color: var(--ink-soft); }
 </section>
 
 <section>
+  <h2>And when there is no catalogue?</h2>
+  <p class="lede">Then the model reads the page and writes the parser. Here is one it
+  wrote for <a href="https://www.qlocktwo.com">qlocktwo.com</a>, a shop on no platform
+  we recognise — copied out of the cache exactly as it was stored:</p>
+
+<pre>{
+  "title":       "h1",
+  "price":       "div:has(&gt; span.text-base.mr-1)",
+  "brand":       "meta[property='og:site_name']",
+  "images":      ".swiper-slide img",
+  "description": "meta[name='description']"
+}</pre>
+
+  <p>Look at the price selector. Nobody guesses <code>div:has(&gt; span.text-base.mr-1)</code>
+  — it comes from having read that particular page's markup. That is the one step a
+  language model is worth paying for, and it happens once per site.</p>
+
+  <p>Replaying it costs nothing. These rows came back with the model switched off
+  entirely:</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Title</th><th class="num">Price</th><th>Brand</th></tr></thead>
+      <tbody>
+        <tr><td>QLOCKTWO EARTH 45 – Time in Words as a Design Object</td>
+            <td class="num">from€1,600.00</td><td>QLOCKTWO</td></tr>
+        <tr><td>QLOCKTWO Stand Black</td>
+            <td class="num">190</td><td>QLOCKTWO</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="hint">Recorded 31 August 2026. This shop renders in the browser, and the
+  hosted demo above runs without one, which is why this example is shown rather than
+  run live — the price is printed exactly as the recipe returned it, "from€" and all.
+  Point a free key at your own site and you get the same thing, live.</p>
+</section>
+
+<section>
   <h2>Why it stays cheap</h2>
   <p class="lede">The expensive part of scraping is not fetching pages. It is working out
   where the title and the price live on a page nobody has parsed before.</p>
