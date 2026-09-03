@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.ozymandias-owens-2/scrapewright",
+  "name": "io.github.Ozymandias-Owens-2/scrapewright",
   "title": "scrapewright",
   "description": "Give it a store URL, get structured rows. A model writes the parser once; replays are free.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "websiteUrl": "https://scrapewright-api.fly.dev",
   "repository": {
     "url": "https://github.com/Ozymandias-Owens-2/scrapewright",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "scrapewright",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "runtimeHint": "uvx",
       "runtimeArguments": [
         {
@@ -53,7 +53,10 @@
           "isRequired": false,
           "isSecret": false,
           "default": "1",
-          "choices": ["0", "1"]
+          "choices": [
+            "0",
+            "1"
+          ]
         }
       ]
     }

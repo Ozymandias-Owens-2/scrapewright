@@ -36,9 +36,14 @@ def test_the_readme_claims_the_same_server_name(manifest):
 
 
 def test_the_name_is_namespaced_to_the_github_account(manifest):
-    """GitHub auth only lets you publish under your own namespace, lowercased."""
-    assert manifest["name"].startswith("io.github.ozymandias-owens-2/")
-    assert manifest["name"] == manifest["name"].lower()
+    """GitHub auth grants exactly one namespace, and it is case-sensitive.
+
+    The registry refused `io.github.ozymandias-owens-2/scrapewright` with a 403
+    saying the granted namespace was `io.github.Ozymandias-Owens-2/*`. This test
+    previously asserted the lowercase form, which is how a wrong belief passes
+    its own test.
+    """
+    assert manifest["name"].startswith("io.github.Ozymandias-Owens-2/")
 
 
 def test_the_described_command_actually_starts_the_server(manifest):
@@ -52,6 +57,20 @@ def test_the_described_command_actually_starts_the_server(manifest):
     extras = pkg["runtimeArguments"][0]["value"]
     assert extras.startswith("scrapewright[") and "mcp" in extras
     assert pkg["transport"]["type"] == "stdio"
+
+
+def test_the_marker_matches_the_name_exactly_including_case(manifest):
+    """The registry compares these byte for byte.
+
+    Publishing was refused with a 403 for claiming
+    io.github.ozymandias-owens-2/... when the namespace granted by GitHub auth
+    was io.github.Ozymandias-Owens-2/... -- and because PyPI will not accept a
+    re-upload of a version, correcting it cost a release.
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    marker = readme.split("mcp-name:")[1].split("-->")[0].strip()
+
+    assert marker == manifest["name"]
 
 
 def test_the_description_fits_the_registry_limit(manifest):

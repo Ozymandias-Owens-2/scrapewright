@@ -6,4 +6,4 @@ that a source checkout does not announce whatever version happens to be
 pip-installed alongside it.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"

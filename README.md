@@ -169,7 +169,7 @@ speaks MCP:
 The key is only needed for sites on no known platform, where a recipe has to be
 written once. Shopify and WooCommerce stores work without it.
 
-<!-- mcp-name: io.github.ozymandias-owens-2/scrapewright -->
+<!-- mcp-name: io.github.Ozymandias-Owens-2/scrapewright -->
 
 The economics are the point. An agent that reads pages itself pays model tokens per
 page, forever. These tools pay **once per site** — an agent crawling 500 pages spends
