@@ -130,6 +130,12 @@ class Scrapewright:
         rendered = self._browser_fetch(url)
         if rendered is None:
             return record
+        # The static hop may have just written a recipe. Read it back before
+        # rendering, or the browser pass starts from nothing and pays the model
+        # a second time for the page we already bought -- twice the cost, to us
+        # and to whoever is being billed. Selectors learned from static HTML
+        # very often still match once the page has rendered.
+        recipe = self.cache.get(url, schema.name) or recipe
         return self._extract_chain(rendered, url, schema, recipe, allow_llm, True) or record
 
     def _extract_chain(self, html: str, url: str, schema: Schema, recipe,
