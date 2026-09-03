@@ -151,6 +151,26 @@ scrapewright mcp
 Point any MCP client at that command and the agent gains five tools: `detect_site`,
 `scrape_catalog`, `extract_page`, `crawl_site`, and `list_learned_sites`.
 
+Drop this into your client's config — Claude Desktop, Cursor, or anything else that
+speaks MCP:
+
+```json
+{
+  "mcpServers": {
+    "scrapewright": {
+      "command": "uvx",
+      "args": ["--from", "scrapewright[mcp,llm]", "scrapewright", "mcp"],
+      "env": { "ANTHROPIC_API_KEY": "sk-ant-..." }
+    }
+  }
+}
+```
+
+The key is only needed for sites on no known platform, where a recipe has to be
+written once. Shopify and WooCommerce stores work without it.
+
+<!-- mcp-name: io.github.ozymandias-owens-2/scrapewright -->
+
 The economics are the point. An agent that reads pages itself pays model tokens per
 page, forever. These tools pay **once per site** — an agent crawling 500 pages spends
 one synthesis, not five hundred, and platform stores (Shopify, WooCommerce) cost

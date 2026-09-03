@@ -1,0 +1,61 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ozymandias-owens-2/scrapewright",
+  "title": "scrapewright",
+  "description": "Give it a store URL, get structured rows. A model writes the parser once; replays are free.",
+  "version": "1.0.0",
+  "websiteUrl": "https://scrapewright-api.fly.dev",
+  "repository": {
+    "url": "https://github.com/Ozymandias-Owens-2/scrapewright",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "scrapewright",
+      "version": "1.0.0",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "scrapewright[mcp,llm,excel]",
+          "description": "The MCP server, the model client and spreadsheet export are optional extras; the bare package cannot start the server."
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "description": "scrapewright is a CLI first; `mcp` is the subcommand that speaks the protocol."
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "description": "Only needed for sites on no known platform, where a recipe has to be written once. Shopify and WooCommerce stores work without it.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "SCRAPEWRIGHT_CACHE",
+          "description": "Where compiled recipes are kept. Point it at durable storage, or every restart pays to work the same sites out again. Defaults to ~/.scrapewright/recipes.json",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "SCRAPEWRIGHT_OBEY_ROBOTS",
+          "description": "Set to 0 to ignore robots.txt. Only reasonable on sites you own or have written permission for; the default is to obey.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "1",
+          "choices": ["0", "1"]
+        }
+      ]
+    }
+  ]
+}
