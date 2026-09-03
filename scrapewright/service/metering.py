@@ -47,12 +47,16 @@ class _CountingLlm:
     meter: Meter
 
     def synthesize(self, html: str, url: str, schema=None):
-        self.meter.syntheses += 1
-        # Older/injected extractors may not take a schema argument.
+        # Counted after it returns, not before. A call that raised produced no
+        # recipe and was never billed to us either, so charging a customer 300
+        # credits for it is taking money for nothing.
         try:
-            return self.inner.synthesize(html, url, schema)
+            recipe = self.inner.synthesize(html, url, schema)
         except TypeError:
-            return self.inner.synthesize(html, url)
+            # Older/injected extractors may not take a schema argument.
+            recipe = self.inner.synthesize(html, url)
+        self.meter.syntheses += 1
+        return recipe
 
 
 def metered_scrapewright(*, js: bool = False, meter: Meter | None = None,

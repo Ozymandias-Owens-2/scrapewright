@@ -232,16 +232,22 @@ def create_app(store: Store | None = None,
         enforce_quota(key)
         schema = _schema_for(req.fields)
         sw, meter = metered_scrapewright(js=req.js)
-        record = None
         try:
             record = sw.extract(req.url, schema)
+        except Exception as e:
+            # Nothing is charged. The caller cannot act on our failure, and
+            # billing for a request that errored is how a service loses the
+            # benefit of the doubt it only gets once.
+            log.exception("extract failed for %s", req.url)
+            raise HTTPException(502, f"could not read that page: {e}") from e
         finally:
             sw.close()
-            # Charge for what was delivered, not for the attempt: a page that
-            # yields nothing costs no record credits. A render or synthesis it
-            # did consume is still charged -- that work really happened.
-            spent = charge(key, {**meter.as_dict(), "records": 1 if record else 0},
-                           f"extract {req.url}")
+
+        # Charge for what was delivered, not for the attempt: a page that yields
+        # nothing costs no record credits. A render or synthesis it did consume
+        # is still charged -- that work really happened.
+        spent = charge(key, {**meter.as_dict(), "records": 1 if record else 0},
+                       f"extract {req.url}")
 
         if record is None:
             raise HTTPException(
@@ -268,16 +274,19 @@ def create_app(store: Store | None = None,
 
         def work() -> tuple[Any, dict[str, int]]:
             sw, meter = metered_scrapewright(js=req.js)
-            records = []
             try:
                 records = list(sw.crawl_records(req.url, schema, max_items=max_items))
             finally:
                 sw.close()
-                # A platform catalog returns hundreds of products in a couple of
-                # JSON requests, so fetch counts describe our effort, not the
-                # customer's benefit. `records` is the meter quotas run on.
-                usage = {**meter.as_dict(), "records": len(records)}
-                usage["credits_spent"] = charge(key, usage, f"crawl {req.url}")
+            # Only a job that finished is billed. A crawl that died partway may
+            # have cost us real renders, and we eat those: a failed job that
+            # still takes credits is worse for us than the renders are.
+            #
+            # A platform catalog returns hundreds of products in a couple of
+            # JSON requests, so fetch counts describe our effort, not the
+            # customer's benefit. `records` is the meter quotas run on.
+            usage = {**meter.as_dict(), "records": len(records)}
+            usage["credits_spent"] = charge(key, usage, f"crawl {req.url}")
             return ({"count": len(records),
                      "records": [_record_payload(r) for r in records]}, usage)
 

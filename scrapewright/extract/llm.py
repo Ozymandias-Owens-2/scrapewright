@@ -14,6 +14,7 @@ thin wrapper that talks to the Anthropic API.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from bs4 import BeautifulSoup, Comment
@@ -143,7 +144,14 @@ class LlmExtractor:
                 "The LLM extractor needs the 'anthropic' package. "
                 "Install it with:  pip install scrapewright[llm]"
             ) from e
-        self._client = anthropic.Anthropic(api_key=self._api_key)
+        # Identity-linked keys refuse to work without naming a workspace, and
+        # the error only appears on the first real call -- in production, on a
+        # customer's request. Passing it as a default header costs nothing when
+        # the variable is unset, which is the case for ordinary keys.
+        workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+        headers = {"anthropic-workspace-id": workspace} if workspace else None
+        self._client = anthropic.Anthropic(api_key=self._api_key,
+                                           default_headers=headers)
         return self._client
 
     def synthesize(self, html: str, url: str,
