@@ -97,6 +97,27 @@ def _record_payload(record: Record) -> dict[str, Any]:
                      for k, v in record.data.items()}}
 
 
+def browser_available() -> bool:
+    """Can this deployment render a client-side page?
+
+    Reported by /health because the answer is a property of the image, not the
+    code: the same build with WITH_JS=0 silently cannot serve `js=true`, and
+    without this the only way to find out is a crawl that comes back empty.
+
+    Checks that the executable exists rather than launching it -- a health check
+    that starts Chromium every thirty seconds is its own outage.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return False
+    try:
+        with sync_playwright() as p:
+            return Path(p.chromium.executable_path).exists()
+    except Exception:
+        return False
+
+
 def _default_billing() -> BillingProvider:
     """Stripe when a key is configured, otherwise nothing is for sale.
 
@@ -188,7 +209,7 @@ def create_app(store: Store | None = None,
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "version": __version__}
+        return {"ok": True, "version": __version__, "js": browser_available()}
 
     @app.post("/v1/detect")
     def detect_endpoint(req: DetectRequest,

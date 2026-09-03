@@ -11,6 +11,12 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
 [build]
   dockerfile = "Dockerfile"
 
+  [build.args]
+    # Ship Chromium. Without it the `js=true` path and the `renders` meter are
+    # dead in production -- the library can read client-rendered shops and the
+    # hosted service could not. It costs a much larger image and more memory.
+    WITH_JS = "1"
+
 [env]
   # The Dockerfile sets this too; repeated here because this file is the thing
   # people read when they wonder where the data lives.
@@ -49,4 +55,7 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # 1GB because of Chromium: a headless render of a heavy shop page will not fit
+  # in 512MB, and the failure mode is the machine being killed mid-crawl rather
+  # than an error a caller can read.
+  memory = "1024mb"

@@ -4,10 +4,15 @@
 FROM python:3.12-slim
 
 ARG WITH_JS=0
+
+# PLAYWRIGHT_BROWSERS_PATH matters: Chromium is installed as root but run as an
+# unprivileged user, and the default location is /root/.cache, which that user
+# cannot read. The failure would only show up at runtime, on the first render.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     SCRAPEWRIGHT_DB=/data/scrapewright_service.db \
-    SCRAPEWRIGHT_CACHE=/data/recipes.json
+    SCRAPEWRIGHT_CACHE=/data/recipes.json \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
@@ -15,7 +20,9 @@ COPY scrapewright ./scrapewright
 
 RUN pip install --no-cache-dir ".[service,llm,excel,stripe,mcp]" \
  && if [ "$WITH_JS" = "1" ]; then \
-      pip install --no-cache-dir ".[js]" && playwright install --with-deps chromium; \
+      pip install --no-cache-dir ".[js]" \
+      && playwright install --with-deps chromium \
+      && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"; \
     fi
 
 # Usage data outlives the container.
