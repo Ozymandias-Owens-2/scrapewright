@@ -98,3 +98,76 @@ def test_selector_replay_on_generic_html(fixture):
         "https://boutique.example.com/img/boot-side.jpg",
     ]
     assert p.is_usable()
+
+
+# ── list fields beyond images ────────────────────────────────────────────────
+def test_a_list_of_table_cells_is_read_as_text():
+    """List fields defaulted to reading `src`, so anything that was not an
+    image came back empty and the whole record collapsed to None. Found on a
+    Treasury data table: the model wrote a correct recipe and got nothing."""
+    from scrapewright.extract.base import SelectorRecipe
+    from scrapewright.extract.selectors import SelectorExtractor
+    from scrapewright.schema import Schema
+
+    html = """<table><tbody>
+      <tr data-testid="row"><td>9/30/2010</td><td>$414 B</td></tr>
+      <tr data-testid="row"><td>9/30/2011</td><td>$454.4 B</td></tr>
+    </tbody></table>"""
+    schema = Schema.from_names(["date:list", "spend:list"], name="rates")
+    recipe = SelectorRecipe(origin="https://t.test", schema_name="rates", fields={
+        "date": 'tbody tr[data-testid="row"] td:nth-child(1)',
+        "spend": 'tbody tr[data-testid="row"] td:nth-child(2)',
+    })
+
+    values = SelectorExtractor(recipe, schema).extract_values(html, "https://t.test")
+
+    assert values["date"] == ["9/30/2010", "9/30/2011"]
+    assert values["spend"] == ["$414 B", "$454.4 B"]
+
+
+def test_a_list_of_images_still_reads_src():
+    """The fix must not break what the old default was there for."""
+    from scrapewright.extract.base import SelectorRecipe
+    from scrapewright.extract.selectors import SelectorExtractor
+    from scrapewright.schema import Schema
+
+    html = '<div class="g"><img src="/a.jpg"><img src="/b.jpg"></div>'
+    schema = Schema.from_names(["images:list"], name="product")
+    recipe = SelectorRecipe(origin="https://s.test", schema_name="product",
+                            fields={"images": ".g img"})
+
+    values = SelectorExtractor(recipe, schema).extract_values(html, "https://s.test/p")
+
+    assert values["images"] == ["https://s.test/a.jpg", "https://s.test/b.jpg"]
+
+
+def test_a_list_of_links_reads_href():
+    from scrapewright.extract.base import SelectorRecipe
+    from scrapewright.extract.selectors import SelectorExtractor
+    from scrapewright.schema import Schema
+
+    html = '<ul><li><a href="/one">One</a></li><li><a href="/two">Two</a></li></ul>'
+    schema = Schema.from_names(["links:list"], name="page")
+    recipe = SelectorRecipe(origin="https://s.test", schema_name="page",
+                            fields={"links": "ul a"})
+
+    values = SelectorExtractor(recipe, schema).extract_values(html, "https://s.test/")
+
+    assert values["links"] == ["https://s.test/one", "https://s.test/two"]
+
+
+def test_an_explicit_mode_still_wins():
+    """A recipe that names the attribute must be obeyed over the guess."""
+    from scrapewright.extract.base import SelectorRecipe
+    from scrapewright.extract.selectors import SelectorExtractor
+    from scrapewright.schema import Schema
+
+    html = '<div><span data-value="7">seven</span><span data-value="8">eight</span></div>'
+    schema = Schema.from_names(["nums:list"], name="page")
+    recipe = SelectorRecipe(origin="https://s.test", schema_name="page",
+                            fields={"nums": "span"},
+                            modes={"nums": "attr_all:data-value"})
+
+    values = SelectorExtractor(recipe, schema).extract_values(html, "https://s.test/")
+
+    assert values["nums"] == ["7", "8"]

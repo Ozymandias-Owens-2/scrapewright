@@ -31,6 +31,16 @@ def _read(el, mode: str) -> str | None:
     return None
 
 
+def _natural_attr(element) -> str:
+    """What a list of these elements is obviously made of."""
+    name = getattr(element, "name", "")
+    if name in ("img", "source"):
+        return "src"
+    if name == "a" and element.get("href"):
+        return "href"
+    return "text"
+
+
 class SelectorExtractor(Extractor):
     kind = "selector"
     is_catalog = False
@@ -53,10 +63,18 @@ class SelectorExtractor(Extractor):
             wants_many = field in list_fields or mode.startswith("attr_all:")
 
             if wants_many:
-                attr = mode.split(":", 1)[1] if ":" in mode else "src"
+                # The mode wins when it names an attribute. Otherwise the
+                # element decides: an <img> means its src, a link means its
+                # href, and anything else means its text. Defaulting to src
+                # regardless made list fields work for images and silently
+                # return nothing for every other kind of list -- table cells,
+                # tags, dates -- because a <td> has no src.
+                explicit = mode.split(":", 1)[1] if ":" in mode else None
                 found = []
                 for el in soup.select(selector):
-                    raw = el.get(attr) if attr != "text" else el.get_text(strip=True)
+                    attr = explicit or _natural_attr(el)
+                    raw = (el.get_text(strip=True) if attr == "text"
+                           else el.get(attr))
                     if raw:
                         found.append(urljoin(url, raw) if attr in ("src", "href") else raw)
                 if found:
