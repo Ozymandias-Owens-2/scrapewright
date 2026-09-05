@@ -197,6 +197,24 @@ def cmd_plans(args) -> int:
     return 0
 
 
+def cmd_stripe(args) -> int:
+    """Put our packs into Stripe's catalogue so its reporting can see them."""
+    from .service.stripe_billing import StripeBilling
+
+    try:
+        rows = StripeBilling().sync_products()
+    except Exception as e:
+        print(f"could not sync: {e}", file=sys.stderr)
+        return 1
+
+    made = sum(1 for r in rows if r["created"])
+    for r in rows:
+        state = "created" if r["created"] else "already there"
+        print(f"  {r['pack']:8} {r['lookup_key']:34} {state}")
+    print(f"{made} created, {len(rows) - made} unchanged")
+    return 0
+
+
 def cmd_credits(args) -> int:
     """Grant credits or read a balance."""
     from .service.credits import FREE_MONTHLY_CREDITS, PACKS_BY_NAME
@@ -358,6 +376,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="reconcile: report without granting")
     cr.add_argument("--db", default=_default_db())
     cr.set_defaults(func=cmd_credits)
+
+    st = sub.add_parser("stripe", help="Manage the Stripe product catalogue")
+    st.add_argument("action", choices=["sync-products"])
+    st.set_defaults(func=cmd_stripe)
 
     m = sub.add_parser("mcp", help="Run as an MCP server for AI agents")
     m.add_argument("--transport", default="stdio",

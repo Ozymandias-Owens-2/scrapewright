@@ -4,7 +4,7 @@
   "title": "scrapewright",
   "description": "Give it a store URL, get structured rows. A model writes the parser once; replays are free.",
   "version": "1.0.1",
-  "websiteUrl": "https://scrapewright-api.fly.dev",
+  "websiteUrl": "https://scrapewright.app",
   "repository": {
     "url": "https://github.com/Ozymandias-Owens-2/scrapewright",
     "source": "github"

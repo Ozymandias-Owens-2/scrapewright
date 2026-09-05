@@ -26,17 +26,20 @@ money that actually moved.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from .credits import PACKS_BY_NAME, CreditPack
+from .credits import PACKS, PACKS_BY_NAME, CreditPack
 from .plans import DEFAULT_TIER
 from .store import ApiKey, Store
 
 # The only event we act on. A payment produces several; acting on more than one
 # is how an integration double-credits itself.
 PAID_EVENT = "checkout.session.completed"
+
+log = logging.getLogger("scrapewright.service.stripe")
 
 # Managed Payments makes Stripe the merchant of record, so Stripe assesses VAT
 # per jurisdiction itself -- and it rejects a line item that does not say what
@@ -46,7 +49,17 @@ PAID_EVENT = "checkout.session.completed"
 DEFAULT_TAX_CODE = "txcd_10103001"  # software as a service, business use
 
 # Overridden with PUBLIC_BASE_URL wherever this is deployed.
-DEFAULT_SITE = "https://scrapewright-api.fly.dev"
+DEFAULT_SITE = "https://scrapewright.app"
+
+
+def price_lookup_key(pack: CreditPack, currency: str = "usd") -> str:
+    """A stable handle for one pack at one price.
+
+    Stripe prices are immutable, so the amount is part of the key: changing a
+    pack's price mints a new price rather than trying to edit an old one, and
+    the previous key simply stops being used.
+    """
+    return f"scrapewright-{pack.name}-{pack.price_usd}{currency}"
 
 
 def _plain(value: Any) -> Any:
@@ -168,19 +181,7 @@ class StripeBilling:
 
         session = self.stripe.checkout.Session.create(
             mode="payment",
-            line_items=[{
-                "quantity": 1,
-                "price_data": {
-                    "currency": self.currency,
-                    "unit_amount": pack.price_usd * 100,   # Stripe counts cents
-                    "product_data": {
-                        "name": f"scrapewright — {pack.credits:,} credits",
-                        "description": (f"{pack.name} pack. Credits never expire "
-                                        f"and are spent per record delivered."),
-                        "tax_code": self.tax_code,
-                    },
-                },
-            }],
+            line_items=[self._line_item(pack)],
             # email_hash rides along so a payment can be reattached to the
             # person if this key stops existing. Keys live only in our database;
             # Stripe is the copy that survives losing it.
@@ -193,6 +194,92 @@ class StripeBilling:
         return {"checkout_url": session.url, "session_id": session.id,
                 "pack": pack.name, "credits": pack.credits,
                 "price_usd": pack.price_usd}
+
+    def _line_item(self, pack: CreditPack) -> dict[str, Any]:
+        """Charge against the catalogue price if one exists, else build it inline.
+
+        A catalogue price is worth having: it is what populates Stripe's product
+        list and its reporting, instead of every purchase minting a nameless
+        one-off. But it also puts an amount somewhere a person can edit, so it is
+        checked against our own price list before use. A mismatch means somebody
+        changed the price in the dashboard, and the customer is charged what we
+        advertise, not what the dashboard now says.
+        """
+        expected = pack.price_usd * 100
+        price = self._catalogue_price(pack)
+
+        if price is not None:
+            amount = _plain(price).get("unit_amount")
+            if amount == expected:
+                return {"price": _plain(price)["id"], "quantity": 1}
+            log.error("Stripe price %s for the %s pack says %s cents, our price "
+                      "list says %s. Charging ours and ignoring the catalogue.",
+                      _plain(price).get("id"), pack.name, amount, expected)
+
+        return {
+            "quantity": 1,
+            "price_data": {
+                "currency": self.currency,
+                "unit_amount": expected,          # Stripe counts cents
+                "product_data": {
+                    "name": f"scrapewright — {pack.credits:,} credits",
+                    "description": (f"{pack.name} pack. Credits never expire "
+                                    f"and are spent per record delivered."),
+                    "tax_code": self.tax_code,
+                },
+            },
+        }
+
+    def _catalogue_price(self, pack: CreditPack):
+        try:
+            found = self.stripe.Price.list(
+                lookup_keys=[price_lookup_key(pack, self.currency)],
+                active=True, limit=1)
+        except Exception as e:
+            # Never let a lookup failure block a sale -- fall back to inline.
+            log.warning("could not read the Stripe price list: %s", e)
+            return None
+        rows = _plain(found).get("data") or []
+        return rows[0] if rows else None
+
+    def sync_products(self) -> list[dict[str, Any]]:
+        """Put our packs into Stripe's product catalogue, idempotently.
+
+        Without this the catalogue stays empty: an inline price mints a nameless
+        one-off product per purchase, so Stripe's own reporting can never tell
+        you which pack sells. Running it twice changes nothing.
+        """
+        if not self.secret_key:
+            raise StripeConfigError(
+                "STRIPE_SECRET_KEY is not set; nothing to sync against")
+
+        results = []
+        for pack in PACKS:
+            key = price_lookup_key(pack, self.currency)
+            existing = self._catalogue_price(pack)
+            if existing is not None:
+                results.append({"pack": pack.name, "lookup_key": key,
+                                "price": _plain(existing)["id"], "created": False})
+                continue
+
+            product = _plain(self.stripe.Product.create(
+                name=f"scrapewright — {pack.credits:,} credits",
+                description=(f"{pack.name} pack. Credits never expire and are "
+                             f"spent per record delivered."),
+                tax_code=self.tax_code,
+                metadata={"pack": pack.name, "credits": str(pack.credits)},
+            ))
+            price = _plain(self.stripe.Price.create(
+                product=product["id"],
+                currency=self.currency,
+                unit_amount=pack.price_usd * 100,
+                lookup_key=key,
+                metadata={"pack": pack.name, "credits": str(pack.credits)},
+            ))
+            results.append({"pack": pack.name, "lookup_key": key,
+                            "price": price["id"], "product": product["id"],
+                            "created": True})
+        return results
 
     # ── the webhook ──────────────────────────────────────────────────────────
     def verify(self, payload: bytes, signature: str) -> dict:

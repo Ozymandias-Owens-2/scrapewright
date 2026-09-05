@@ -25,6 +25,9 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
   # deploy costs real money to work out again.
   SCRAPEWRIGHT_CACHE = "/data/recipes.json"
   SCRAPEWRIGHT_OBEY_ROBOTS = "1"
+  # Where Stripe sends a customer back after paying, and what the registry
+  # listing points at.
+  PUBLIC_BASE_URL = "https://scrapewright.app"
 
 [mounts]
   source = "scrapewright_data"
