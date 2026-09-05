@@ -77,6 +77,12 @@ class ExtractRequest(BaseModel):
 
 class CrawlRequest(ExtractRequest):
     max_items: int = 25
+    scroll: int = Field(
+        0, ge=0, le=50,
+        description="For listings that load more as you scroll: how many times "
+                    "to scroll before reading. Needs js=true. Scrolling stops "
+                    "early when the page stops growing, so a generous number "
+                    "costs nothing on a page that does not need it.")
 
 
 class SignupRequest(BaseModel):
@@ -309,7 +315,8 @@ def create_app(store: Store | None = None,
         schema = _schema_for(req.fields)
 
         def work() -> tuple[Any, dict[str, int]]:
-            sw, meter = metered_scrapewright(js=req.js)
+            sw, meter = metered_scrapewright(js=req.js,
+                                             max_scrolls=req.scroll)
             try:
                 records = list(sw.crawl_records(req.url, schema, max_items=max_items))
             finally:

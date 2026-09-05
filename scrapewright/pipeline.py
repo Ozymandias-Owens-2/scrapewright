@@ -72,7 +72,8 @@ class Scrapewright:
                  js: bool = False,
                  browser=None,
                  accept_ratio: float = DEFAULT_ACCEPT_RATIO,
-                 max_synth_per_run: int = DEFAULT_MAX_SYNTH_PER_RUN):
+                 max_synth_per_run: int = DEFAULT_MAX_SYNTH_PER_RUN,
+                 max_scrolls: int = 0):
         self.cache = cache or RecipeCache()
         self.llm = llm or LlmExtractor()
         self.session = session
@@ -82,6 +83,9 @@ class Scrapewright:
         self._js_enabled = js or browser is not None
         self.accept_ratio = accept_ratio
         self.max_synth_per_run = max_synth_per_run
+        # Listings that load more as you scroll look twenty items long to a
+        # single render. Only meaningful with a browser, hence 0 by default.
+        self.max_scrolls = max_scrolls
         self._synth_calls = 0
 
     # ── Catalog mode ─────────────────────────────────────────────────────────
@@ -233,7 +237,7 @@ class Scrapewright:
 
     def _get_browser(self):
         if self._browser is None:
-            self._browser = BrowserFetcher()
+            self._browser = BrowserFetcher(max_scrolls=self.max_scrolls)
         return self._browser
 
     def _browser_fetch(self, url: str) -> str | None:

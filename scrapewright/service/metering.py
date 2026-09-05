@@ -60,6 +60,7 @@ class _CountingLlm:
 
 
 def metered_scrapewright(*, js: bool = False, meter: Meter | None = None,
+                         max_scrolls: int = 0,
                          **kwargs) -> tuple[Scrapewright, Meter]:
     """Build a pipeline whose consumption is counted.
 
@@ -69,7 +70,8 @@ def metered_scrapewright(*, js: bool = False, meter: Meter | None = None,
     """
     meter = meter or Meter()
     fetcher = _CountingFetcher(StaticFetcher(), meter, "pages")
-    browser = _CountingFetcher(BrowserFetcher(), meter, "renders") if js else None
+    browser = (_CountingFetcher(BrowserFetcher(max_scrolls=max_scrolls),
+                                meter, "renders") if js else None)
 
     sw = Scrapewright(fetcher=fetcher, browser=browser, js=js, **kwargs)
     sw.llm = _CountingLlm(sw.llm, meter)

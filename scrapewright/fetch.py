@@ -73,6 +73,29 @@ class StaticFetcher:
         pass
 
 
+def scroll_to_end(page, max_scrolls: int, pause_ms: int = 900) -> int:
+    """Scroll until the page stops growing. Returns how many rounds it took.
+
+    Kept separate from the fetcher so the stopping rule can be tested without a
+    browser, because the rule is the whole difficulty: stop too early and half
+    the catalogue is missing, never stop and one page eats the job. It gives up
+    when a scroll adds no height -- the honest signal that there is no more --
+    and otherwise at ``max_scrolls``, which is what stops a feed that is
+    genuinely endless from running forever.
+    """
+    # Measured before the first scroll, so a page that does not grow costs one
+    # round instead of two -- and most pages do not grow.
+    previous = page.evaluate("document.body.scrollHeight")
+    for round_number in range(1, max_scrolls + 1):
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(pause_ms)
+        height = page.evaluate("document.body.scrollHeight")
+        if height <= previous:
+            return round_number
+        previous = height
+    return max_scrolls
+
+
 class BrowserFetcher:
     """Render a page in headless Chromium and return the resulting DOM.
 
@@ -87,12 +110,18 @@ class BrowserFetcher:
 
     def __init__(self, headless: bool = True, wait_until: str = "networkidle",
                  timeout_ms: int = 30000, settle_ms: int = 0,
-                 user_agent: str | None = None):
+                 user_agent: str | None = None, max_scrolls: int = 0,
+                 scroll_pause_ms: int = 900):
         self.headless = headless
         self.wait_until = wait_until
         self.timeout_ms = timeout_ms
         self.settle_ms = settle_ms
         self.user_agent = user_agent or USER_AGENT
+        # Infinite scroll: a listing that loads more as you go looks like a
+        # twenty-item page to anyone who only reads the first render. Off by
+        # default, because scrolling a page that does not grow is wasted time.
+        self.max_scrolls = max_scrolls
+        self.scroll_pause_ms = scroll_pause_ms
         self._playwright = None
         self._browser = None
         self._page = None
@@ -127,6 +156,8 @@ class BrowserFetcher:
             page.goto(url, wait_until=self.wait_until, timeout=self.timeout_ms)
             if self.settle_ms:
                 page.wait_for_timeout(self.settle_ms)
+            if self.max_scrolls:
+                scroll_to_end(page, self.max_scrolls, self.scroll_pause_ms)
             return page.content()
         except Exception:
             # A render failure is a miss, not a crash — the caller falls back.
