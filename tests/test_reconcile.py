@@ -165,3 +165,72 @@ def test_dry_run_tells_two_payments_of_one_pack_apart(store):
 
     assert [r["session"] for r in result.already] == ["cs_1"]
     assert [r["session"] for r in result.applied] == ["cs_2"]
+
+
+# ── surviving the loss of the keys themselves ────────────────────────────────
+def test_a_payment_is_reattached_to_the_person_when_their_key_is_gone(store):
+    """The gap this closes: Stripe restores the money, but keys live only here.
+
+    If the database is lost, the customer's key stops existing and their paid
+    balance points at an id nobody holds. Because the payment also carries the
+    account's email hash, the person can sign up again and the credits follow
+    them to the new key instead of being stranded.
+    """
+    from scrapewright.service.store import hash_identity
+
+    email = "alice@example.com"
+    # Their original key is gone -- imagine a restore from behind.
+    _, new_key = store.create_key(label="alice again", plan="metered", email=email)
+
+    paid = session("cs_1", "the-lost-key")
+    paid["metadata"]["email_hash"] = hash_identity(email)
+
+    result = billing_for([paid]).reconcile(store)
+
+    assert result.orphaned == []
+    assert len(result.recovered) == 1
+    assert result.recovered[0]["key_id"] == new_key.id
+    assert result.recovered[0]["was_key_id"] == "the-lost-key"
+    assert store.balance(new_key.id) == PACKS_BY_NAME["starter"].credits
+
+
+def test_reattachment_is_still_idempotent(store):
+    """Running it twice must not pay the person twice for one purchase."""
+    from scrapewright.service.store import hash_identity
+
+    email = "alice@example.com"
+    _, new_key = store.create_key(label="alice again", plan="metered", email=email)
+    paid = session("cs_1", "the-lost-key")
+    paid["metadata"]["email_hash"] = hash_identity(email)
+    billing = billing_for([paid])
+
+    billing.reconcile(store)
+    after_first = store.balance(new_key.id)
+    second = billing.reconcile(store)
+
+    assert second.recovered == []
+    assert len(second.already) == 1
+    assert store.balance(new_key.id) == after_first
+
+
+def test_a_stranger_cannot_be_credited_by_guessing(store):
+    """Only an exact identity match reattaches. Anything else stays orphaned."""
+    _, someone = store.create_key(label="bob", plan="metered", email="bob@example.com")
+    paid = session("cs_1", "the-lost-key")
+    paid["metadata"]["email_hash"] = "0" * 64
+
+    result = billing_for([paid]).reconcile(store)
+
+    assert len(result.orphaned) == 1
+    assert store.balance(someone.id) == 0
+
+
+def test_a_payment_without_an_identity_stays_orphaned(store):
+    """Purchases made before the email hash was carried cannot be reattached,
+    and must not silently land on whoever happens to be first in the table."""
+    store.create_key(label="alice", plan="metered", email="alice@example.com")
+
+    result = billing_for([session("cs_old", "the-lost-key")]).reconcile(store)
+
+    assert len(result.orphaned) == 1
+    assert result.recovered == []

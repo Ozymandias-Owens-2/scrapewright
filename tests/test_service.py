@@ -371,3 +371,42 @@ def test_unlimited_tier_is_metered_but_never_refused(client, tmp_path):
     r = other.post("/v1/extract", json={"url": "https://x/1"})
     assert r.status_code == 200
     assert store.usage_for_month(key.id).records == 1     # still counted
+
+
+def test_health_reports_what_a_watchdog_needs(tmp_path):
+    """A process that serves 200s while its database is unreachable is the
+    worst outage there is: monitoring says fine, customers say otherwise."""
+    from fastapi.testclient import TestClient
+
+    from scrapewright.service.app import create_app
+    from scrapewright.service.jobs import JobRegistry
+    from scrapewright.service.store import Store
+
+    client = TestClient(create_app(store=Store(tmp_path / "h.db"), jobs=JobRegistry()))
+
+    body = client.get("/health").json()
+
+    assert body["ok"] is True
+    assert body["database"] is True
+    assert set(body) == {"ok", "version", "js", "database", "payments"}
+
+
+def test_health_says_no_when_the_database_is_gone(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from scrapewright.service.app import create_app
+    from scrapewright.service.jobs import JobRegistry
+    from scrapewright.service.store import Store
+
+    store = Store(tmp_path / "h.db")
+    client = TestClient(create_app(store=store, jobs=JobRegistry()))
+
+    def broken(*a, **kw):
+        raise RuntimeError("disk is gone")
+
+    monkeypatch.setattr(store, "count_events", broken)
+
+    body = client.get("/health").json()
+
+    assert body["ok"] is False
+    assert body["database"] is False

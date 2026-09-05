@@ -94,6 +94,9 @@ class ApiKey:
     plan: str
     created_at: str
     revoked_at: str | None = None
+    # Hashed. It travels with a payment so a purchase can be reattached to the
+    # person if this key ever stops existing.
+    email_hash: str | None = None
 
     @property
     def active(self) -> bool:
@@ -181,7 +184,8 @@ class Store:
                 (key_id, hash_key(raw_key), label, plan, created,
                  hash_identity(email) if email else None),
             )
-        return raw_key, ApiKey(id=key_id, label=label, plan=plan, created_at=created)
+        return raw_key, ApiKey(id=key_id, label=label, plan=plan, created_at=created,
+                               email_hash=hash_identity(email) if email else None)
 
     def resolve(self, raw_key: str) -> ApiKey | None:
         """Look a key up by its hash. Returns None for unknown or revoked keys."""
@@ -194,7 +198,8 @@ class Store:
         if row is None or row["revoked_at"] is not None:
             return None
         return ApiKey(id=row["id"], label=row["label"], plan=row["plan"],
-                      created_at=row["created_at"], revoked_at=row["revoked_at"])
+                      created_at=row["created_at"], revoked_at=row["revoked_at"],
+                      email_hash=row["email_hash"])
 
     def key_exists(self, key_id: str) -> bool:
         """Is there an account to credit? Reconciliation needs to know before
@@ -202,6 +207,23 @@ class Store:
         with self._conn() as conn:
             return conn.execute("SELECT 1 FROM api_keys WHERE id = ?",
                                 (key_id,)).fetchone() is not None
+
+    def find_key_by_email(self, email_or_hash: str) -> str | None:
+        """The newest live key belonging to this person, if any.
+
+        This is what makes a lost key survivable. Keys live only here, so losing
+        the database loses them -- but Stripe remembers who paid, and if that
+        person signs up again the credits can be reattached to their new key
+        instead of stranding money against an id that no longer exists.
+        """
+        looks_hashed = len(email_or_hash) == 64 and all(
+            c in "0123456789abcdef" for c in email_or_hash.lower())
+        needle = email_or_hash.lower() if looks_hashed else hash_identity(email_or_hash)
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id FROM api_keys WHERE email_hash = ? AND revoked_at IS NULL "
+                "ORDER BY created_at DESC LIMIT 1", (needle,)).fetchone()
+        return row["id"] if row else None
 
     def revoke(self, key_id: str) -> bool:
         with self._conn() as conn:

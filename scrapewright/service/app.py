@@ -209,7 +209,27 @@ def create_app(store: Store | None = None,
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "version": __version__, "js": browser_available()}
+        """Whether this instance can actually do its job, not just answer.
+
+        A process that serves 200s while its database is unreachable is the
+        worst kind of outage: monitoring says fine, customers say otherwise. So
+        the database is touched for real, and the answers a watchdog needs --
+        can we render, can we sell -- are stated rather than assumed.
+        """
+        try:
+            store.count_events("healthcheck", "never", hours=1)
+            database = True
+        except Exception:
+            log.exception("health check could not reach the database")
+            database = False
+
+        return {
+            "ok": database,
+            "version": __version__,
+            "js": browser_available(),
+            "database": database,
+            "payments": hasattr(billing, "checkout_session"),
+        }
 
     @app.post("/v1/detect")
     def detect_endpoint(req: DetectRequest,

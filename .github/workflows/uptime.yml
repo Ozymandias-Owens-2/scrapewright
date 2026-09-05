@@ -1,0 +1,70 @@
+# Notices the service is down without anyone watching.
+#
+# The app has crash-looped twice, and both times a person found it by reading
+# logs on a hunch. This is the cheapest thing that would have caught it: GitHub
+# emails you when a scheduled workflow fails, so a failing check is the alert.
+# Public repositories get Actions minutes for free, so watching costs nothing.
+
+name: uptime
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:        # so it can be run by hand after a deploy
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: The service answers, and answers honestly
+        run: |
+          set -euo pipefail
+          BASE="${BASE_URL:-https://scrapewright-api.fly.dev}"
+
+          # A cold machine has to boot, so allow a slow first answer rather
+          # than paging over something that is merely asleep.
+          body=$(curl --silent --show-error --fail --max-time 60 \
+                      --retry 3 --retry-delay 10 --retry-all-errors \
+                      "$BASE/health")
+          echo "health: $body"
+
+          python3 - "$body" <<'PY'
+          import json, sys
+          h = json.loads(sys.argv[1])
+          problems = []
+          if not h.get("ok"):        problems.append("ok is false")
+          if not h.get("database"):  problems.append("database unreachable")
+          if not h.get("js"):        problems.append("this build cannot render")
+          if not h.get("payments"):  problems.append("no payment provider: nobody can buy credits")
+          if problems:
+              print("UNHEALTHY: " + "; ".join(problems))
+              sys.exit(1)
+          print(f"healthy, version {h.get('version')}")
+          PY
+
+      - name: The public demo still returns rows
+        run: |
+          set -euo pipefail
+          BASE="${BASE_URL:-https://scrapewright-api.fly.dev}"
+          # Reaches the whole path a stranger takes: detection, fetching,
+          # parsing. A 429 means the limiter is doing its job, not an outage.
+          code=$(curl --silent --show-error --max-time 120 -o /tmp/demo.json -w '%{http_code}' \
+                 -X POST "$BASE/v1/demo" \
+                 -H 'Content-Type: application/json' \
+                 -d '{"url": "https://www.isaacsellam.com"}')
+          echo "demo: HTTP $code"
+          if [ "$code" = "429" ]; then
+            echo "rate limited -- the endpoint is alive, nothing to report"
+            exit 0
+          fi
+          [ "$code" = "200" ] || { cat /tmp/demo.json; exit 1; }
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/demo.json'))
+          assert d['count'] > 0, 'the demo returned no rows'
+          print(f\"demo returned {d['count']} rows from {d['platform']}\")
+          "

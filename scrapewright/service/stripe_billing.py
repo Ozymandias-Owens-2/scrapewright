@@ -85,16 +85,18 @@ class ReconcileResult:
     """What a reconciliation found. Every payment lands in exactly one list."""
 
     applied: list = field(default_factory=list)    # credited now
+    recovered: list = field(default_factory=list)  # credited to a replacement key
     already: list = field(default_factory=list)    # the ledger already had it
-    orphaned: list = field(default_factory=list)   # paid, but no such account
+    orphaned: list = field(default_factory=list)   # paid, and nobody to credit
     ignored: list = field(default_factory=list)    # not a paid pack of ours
 
     @property
     def credits_applied(self) -> int:
-        return sum(row["credits"] for row in self.applied)
+        return sum(row["credits"] for row in self.applied + self.recovered)
 
     def __str__(self) -> str:
-        return (f"{len(self.applied)} applied ({self.credits_applied:,} credits), "
+        return (f"{len(self.applied)} applied, {len(self.recovered)} reattached "
+                f"({self.credits_applied:,} credits), "
                 f"{len(self.already)} already present, "
                 f"{len(self.orphaned)} orphaned, {len(self.ignored)} ignored")
 
@@ -179,8 +181,12 @@ class StripeBilling:
                     },
                 },
             }],
+            # email_hash rides along so a payment can be reattached to the
+            # person if this key stops existing. Keys live only in our database;
+            # Stripe is the copy that survives losing it.
             metadata={"key_id": key.id, "pack": pack.name,
-                      "credits": str(pack.credits)},
+                      "credits": str(pack.credits),
+                      "email_hash": key.email_hash or ""},
             success_url=self.success_url,
             cancel_url=self.cancel_url,
         )
@@ -282,18 +288,38 @@ class StripeBilling:
                    "pack": pack.name, "credits": pack.credits}
 
             if not store.key_exists(key_id):
-                result.orphaned.append(row)
-                continue
+                # The key is gone -- most likely the database was restored from
+                # behind, or the customer's account was recreated. Stripe still
+                # knows who paid, so look the person up and credit the key they
+                # hold now rather than stranding the money.
+                replacement = (store.find_key_by_email(metadata["email_hash"])
+                               if metadata.get("email_hash") else None)
+                if replacement is None:
+                    result.orphaned.append(row)
+                    continue
+                row = {**row, "key_id": replacement, "was_key_id": key_id}
+                key_id = replacement
+                recovered = True
+            else:
+                recovered = False
 
             if dry_run:
                 seen = store.grant_exists(f"stripe:{session_id}")
-                (result.already if seen else result.applied).append(row)
+                if seen:
+                    result.already.append(row)
+                elif recovered:
+                    result.recovered.append(row)
+                else:
+                    result.applied.append(row)
                 continue
 
             applied = store.grant(
                 key_id, pack.credits,
                 f"stripe: {pack.name} pack (${pack.price_usd})",
                 idempotency_key=f"stripe:{session_id}")
-            (result.applied if applied else result.already).append(row)
+            if applied and recovered:
+                result.recovered.append(row)
+            else:
+                (result.applied if applied else result.already).append(row)
 
         return result
