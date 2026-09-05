@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Refunds — scrapewright</title>
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>Refund policy</h1>
+<p class="updated">Last updated 3 September 2026</p>
+
+<div class="callout">
+Short version: unused credits are refundable within 30 days, no reason needed. Email
+<a href="mailto:fedordyatlov@outlook.com">fedordyatlov@outlook.com</a> with your key
+id and it gets done.
+</div>
+
+<h2>Unused credits</h2>
+<p>Ask within <strong>30 days</strong> of a purchase and any credits still unspent
+from it are refunded in full, to the card you paid with. You do not have to explain
+why. Refunds are processed through Stripe and usually appear within five to ten
+business days, depending on your bank.</p>
+<p>Partly used packs are refunded pro rata: if you bought ten thousand credits and
+spent two thousand, eight thousand come back. Your ledger at
+<code>GET /v1/usage</code> shows exactly what was spent and on what, so there is
+nothing to argue about.</p>
+
+<h2>Credits already spent</h2>
+<p>Spent credits are not normally refundable — the work was done and it cost us real
+money to do. Two exceptions, and both are on us to honour:</p>
+<ul>
+  <li><strong>We charged you for our own failure.</strong> A request that errors
+      should never be billed. If one was, say so and it is credited back. This has
+      happened before, was found and fixed, and the ledger is the proof either
+      way.</li>
+  <li><strong>The result was clearly not what the service claims to deliver</strong>
+      — for example rows returned as empty for a site the service reported as
+      supported. Tell us what you asked for and what came back.</li>
+</ul>
+<p>Where a site simply blocks automated visitors, or returns nothing because it
+publishes nothing to return, the service says so before charging you for rows. That
+is not a fault, and detection is free precisely so you can check first.</p>
+
+<h2>Your statutory rights</h2>
+<p>If you are a consumer in the EU or UK, you normally have fourteen days to withdraw
+from a distance purchase. Because credits are usable immediately, you may be asked to
+confirm at checkout that the service starts at once. The 30-day policy above is
+deliberately more generous than the statutory minimum, and asking under it is
+simpler.</p>
+<p>Nothing on this page limits rights you have that cannot be waived by agreement.</p>
+
+<h2>Chargebacks</h2>
+<p>Please email before disputing a charge with your bank. A chargeback costs both of
+us a fee and takes weeks; a refund takes one message and no fee. There is no
+situation in which asking directly gets you a worse outcome.</p>
+
+<h2>How to ask</h2>
+<p>Email <a href="mailto:fedordyatlov@outlook.com">fedordyatlov@outlook.com</a> with
+your <strong>key id</strong> — the short identifier shown when the key was created,
+also returned by <code>GET /v1/usage</code>. Do not send the key itself; the id is
+enough to find the account, and the key is a secret you should keep.</p>
+<p>Refunds are handled personally, so expect a reply within a few days rather than
+within minutes.</p>
+
+<footer>
+<a href="/">Home</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> ·
+<a href="https://github.com/Ozymandias-Owens-2/scrapewright">Source</a>
+</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — scrapewright</title>
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>Privacy notice</h1>
+<p class="updated">Last updated 3 September 2026</p>
+
+<div class="callout">
+Short version: your email address and IP are stored as one-way hashes and cannot be
+read back. Card details never reach us. The URLs you submit are logged, and the
+selectors compiled from them are reused for everyone.
+</div>
+
+<p>The controller is <strong>Fedor Dyatlov</strong>, a sole trader in El Campello,
+Spain, reachable at
+<a href="mailto:fedordyatlov@outlook.com">fedordyatlov@outlook.com</a>.</p>
+
+<h2>What is stored, and why</h2>
+<ul>
+  <li><strong>Your email address — as a SHA-256 hash, not in readable form.</strong>
+      It exists so the free monthly allowance can be granted once per person rather
+      than once per key, and so a purchase can be reattached to you if your key is
+      ever lost. Because it is hashed, we can check whether a given address matches
+      but cannot recover the address or write to you at it.</li>
+  <li><strong>Your IP address — also as a SHA-256 hash.</strong> Only a count is
+      used, to limit how many keys and demo runs come from one address in a day.</li>
+  <li><strong>Your API key — as a SHA-256 hash.</strong> The key itself is shown once
+      at creation and never stored. If you lose it, nobody can recover it, including
+      us.</li>
+  <li><strong>Usage records:</strong> which endpoints you called, how many pages,
+      renders and rows, and your credit ledger. This is what your bill is made
+      of.</li>
+  <li><strong>The URLs you submit</strong>, in server logs and in job records.</li>
+</ul>
+
+<h2>What is not stored</h2>
+<p>Card numbers, billing addresses and names never reach this service. Stripe handles
+payment and holds that data as merchant of record; see
+<a href="https://stripe.com/privacy">Stripe's privacy policy</a>. We receive only a
+payment confirmation carrying your key id, the pack you bought, and the hashed
+address described above.</p>
+
+<h2>Something worth knowing about the recipes</h2>
+<p>When the service compiles a site it has not seen, the resulting CSS selectors are
+cached per domain and <strong>reused for every customer</strong>. That is deliberate
+— it is why a site costs money to read once and nothing thereafter. The cache holds
+selectors and a domain name, not your data and not your identity, but it does mean
+another customer benefits from a site you were first to compile, and that the set of
+domains compiled is not private between customers.</p>
+<p>The rows extracted for you are not shared. Job results are yours and are readable
+only with your key.</p>
+
+<h2>Third parties</h2>
+<ul>
+  <li><strong>Fly.io</strong> — hosts the service and stores its database, in Paris.</li>
+  <li><strong>Stripe</strong> — processes payments and acts as merchant of record.</li>
+  <li><strong>Anthropic</strong> — receives the HTML of a page when a site has to be
+      compiled, in order to produce selectors. This happens once per site, not per
+      page, and only for sites that publish no catalogue of their own.</li>
+</ul>
+<p>Nothing is sold, and nothing is shared for advertising. There are no analytics or
+tracking scripts on this site, and no cookies are set.</p>
+
+<h2>How long it is kept</h2>
+<p>Account records and the credit ledger are kept while the account exists and for
+six years afterwards, because they are financial records. Server logs are kept for
+about thirty days. Compiled recipes are kept until the site changes enough that they
+stop working.</p>
+
+<h2>Your rights</h2>
+<p>Under the GDPR you may ask for a copy of your data, its correction, or its
+deletion, and may object to processing or complain to a supervisory authority — in
+Spain, the <a href="https://www.aepd.es">AEPD</a>.</p>
+<p>One honest limitation: because your email and IP are stored only as hashes, we
+cannot search for you by address. To identify your account, send your
+<strong>key id</strong> — never the key itself. Deletion removes the account, its
+hashes and its usage history, except the payment records Stripe and tax law require
+us to retain.</p>
+<p>The legal basis is performance of a contract for everything needed to run your
+account and bill you, and legitimate interest for the rate limiting that keeps the
+free tier from being farmed.</p>
+
+<h2>Changes</h2>
+<p>The date at the top says when this last changed. Material changes will be
+announced here before taking effect.</p>
+
+<footer>
+<a href="/">Home</a> · <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> ·
+<a href="https://github.com/Ozymandias-Owens-2/scrapewright">Source</a>
+</footer>
+</div>
+</body>
+</html>

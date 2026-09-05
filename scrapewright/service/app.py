@@ -23,6 +23,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .. import __version__
@@ -202,10 +203,25 @@ def create_app(store: Store | None = None,
         return spent
 
     # ── endpoints ────────────────────────────────────────────────────────────
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
     @app.get("/", include_in_schema=False)
     def landing() -> FileResponse:
         """The page a human lands on. Everything else here answers to machines."""
         return FileResponse(STATIC / "index.html", media_type="text/html")
+
+    # Terms, refunds and privacy. A payment processor will not approve a live
+    # account without them, and a customer should not have to ask what happens
+    # to their money or their data.
+    def _page(name: str):
+        def serve() -> FileResponse:
+            return FileResponse(STATIC / name, media_type="text/html")
+        return serve
+
+    for path, filename in (("/terms", "terms.html"),
+                           ("/refunds", "refunds.html"),
+                           ("/privacy", "privacy.html")):
+        app.get(path, include_in_schema=False)(_page(filename))
 
     @app.get("/health")
     def health() -> dict[str, Any]:

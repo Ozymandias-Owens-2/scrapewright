@@ -410,3 +410,41 @@ def test_health_says_no_when_the_database_is_gone(tmp_path, monkeypatch):
 
     assert body["ok"] is False
     assert body["database"] is False
+
+
+def test_the_pages_a_payment_processor_asks_for_are_served(tmp_path):
+    """Stripe will not approve a live account without these, and a customer
+    should not have to ask what happens to their money or their data."""
+    from fastapi.testclient import TestClient
+
+    from scrapewright.service.app import create_app
+    from scrapewright.service.jobs import JobRegistry
+    from scrapewright.service.store import Store
+
+    client = TestClient(create_app(store=Store(tmp_path / "l.db"), jobs=JobRegistry()))
+
+    for path in ("/terms", "/refunds", "/privacy"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert "text/html" in r.headers["content-type"]
+        # Each must reach the others and the stylesheet, or they are dead ends.
+        assert "/static/legal.css" in r.text, path
+        assert "mailto:" in r.text, path
+
+    assert client.get("/static/legal.css").status_code == 200
+
+
+def test_the_landing_page_links_to_them(tmp_path):
+    """A policy nobody can find is not a policy."""
+    from fastapi.testclient import TestClient
+
+    from scrapewright.service.app import create_app
+    from scrapewright.service.jobs import JobRegistry
+    from scrapewright.service.store import Store
+
+    client = TestClient(create_app(store=Store(tmp_path / "l.db"), jobs=JobRegistry()))
+
+    home = client.get("/").text
+
+    for path in ('href="/terms"', 'href="/refunds"', 'href="/privacy"'):
+        assert path in home

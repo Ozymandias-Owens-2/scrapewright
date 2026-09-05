@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms of Service — scrapewright</title>
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>Terms of Service</h1>
+<p class="updated">Last updated 3 September 2026</p>
+
+<p>scrapewright is operated by <strong>Fedor Dyatlov</strong>, a sole trader based in
+El Campello, Spain. Questions about anything below go to
+<a href="mailto:fedordyatlov@outlook.com">fedordyatlov@outlook.com</a>.</p>
+
+<p>Using the service means accepting these terms. They are written to be read, not
+to be impressive.</p>
+
+<h2>What the service does</h2>
+<p>You send a URL; the service fetches those pages and returns structured rows. For
+sites on a recognised platform it reads a published catalogue. For anything else a
+language model works out a set of CSS selectors once, which is then reused.</p>
+
+<h2>What you pay for</h2>
+<p>Credits are prepaid and spent per unit of work: one credit per row delivered, five
+per page rendered in a browser, three hundred to compile a site not seen before.
+Current prices are on the <a href="/">home page</a> and at
+<code>GET /v1/credits/packs</code>.</p>
+<ul>
+  <li>Credits do not expire and are not transferable between accounts.</li>
+  <li>Each account receives a monthly allowance of free credits. It is granted once
+      per email address per month, and may be changed or withdrawn.</li>
+  <li>A request that fails through our fault is not charged. Work that was genuinely
+      performed is charged even if the result was empty — for example a page that
+      was fetched and parsed but contained nothing matching your fields.</li>
+  <li>Your balance and its history are visible at <code>GET /v1/usage</code>.</li>
+</ul>
+
+<h2>Payment</h2>
+<p>Payments are processed by Stripe. Stripe acts as the merchant of record for this
+service, which means Stripe is the seller on your receipt and is responsible for
+charging and remitting VAT and sales tax in your jurisdiction. We never see or store
+your card details.</p>
+
+<h2>How you may use it</h2>
+<p>The service fetches pages from third-party websites on your instruction. You are
+responsible for what you point it at.</p>
+<ul>
+  <li>The crawler identifies itself honestly and obeys <code>robots.txt</code>. Do not
+      ask us to disable that for a site you do not own or have written permission
+      for.</li>
+  <li>Do not use it to collect personal data about individuals, to circumvent access
+      controls or paywalls, or for anything unlawful where you are.</li>
+  <li>Do not use it in a way that overloads a target site. Rate limits exist and may
+      be tightened without notice.</li>
+  <li>Do not resell raw access to the API as your own service.</li>
+</ul>
+<p>We may suspend or revoke a key that is being used this way. Where a suspension is
+our decision rather than your breach, unused credits are refunded.</p>
+
+<h2>What we do not promise</h2>
+<p>This is a small service run by one person. Read that plainly:</p>
+<ul>
+  <li>There is no uptime guarantee and no service level agreement.</li>
+  <li>Websites change without warning. A recipe that worked yesterday may return
+      nothing today; the service re-compiles when it detects this, but extraction
+      quality is not guaranteed for any particular site.</li>
+  <li>Some sites block automated visitors. The service reports that honestly rather
+      than working around it.</li>
+  <li>The service is provided as is, without warranties of any kind. To the extent
+      the law allows, liability is limited to the amount you paid in the three months
+      before the claim.</li>
+</ul>
+<p>Nothing here removes rights you have as a consumer that cannot be waived.</p>
+
+<h2>Your data and ours</h2>
+<p>Rows extracted for you are yours. The selector recipes the service compiles are
+ours, are cached per site, and are reused across all customers — that is what keeps
+the price low, and it means compiling a site benefits everyone who asks for it
+afterwards. See the <a href="/privacy">privacy notice</a> for what we store about
+you.</p>
+
+<h2>Changes and ending</h2>
+<p>These terms may change; the date at the top says when they last did. Material
+changes will be announced on this page before taking effect. You may stop using the
+service at any time and request a refund of unused credits under the
+<a href="/refunds">refund policy</a>. We may close an account for breach of these
+terms, refunding unused credits unless the breach was fraud.</p>
+
+<p>Spanish law applies, and the courts of Spain have jurisdiction, without removing
+any protection available to you under the law of your own country of residence.</p>
+
+<footer>
+<a href="/">Home</a> · <a href="/refunds">Refunds</a> · <a href="/privacy">Privacy</a> ·
+<a href="https://github.com/Ozymandias-Owens-2/scrapewright">Source</a>
+</footer>
+</div>
+</body>
+</html>

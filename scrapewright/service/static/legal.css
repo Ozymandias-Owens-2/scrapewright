@@ -1,0 +1,84 @@
+/* Shared chrome for the terms, refunds and privacy pages.
+   The landing page keeps its own inline styles: it is the one page where load
+   speed is worth a duplicated token block, and it is also the page most likely
+   to be redesigned without touching these. */
+
+:root {
+  --bg:        #FAF6F0;
+  --paper:     #FFFDFA;
+  --ink:       #322E29;
+  --ink-soft:  #736A5F;
+  --line:      #EBE2D6;
+  --clay:      #A8624A;
+  --sage-soft: #E9EDE4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #221F1C;
+    --paper:     #2A2622;
+    --ink:       #EDE6DC;
+    --ink-soft:  #A79C8E;
+    --line:      #3A342E;
+    --clay:      #D08A6E;
+    --sage-soft: #2C332A;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+}
+.wrap { max-width: 680px; margin: 0 auto; padding: 0 24px 72px; }
+
+h1, h2 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  line-height: 1.25;
+}
+h1 { font-size: clamp(1.7rem, 4vw, 2.2rem); margin: 0 0 .3em; }
+h2 { font-size: 1.15rem; margin: 2em 0 .5em; }
+p, li { color: var(--ink); }
+p  { margin: 0 0 1em; }
+ul { padding-left: 1.2em; }
+li { margin-bottom: .45em; }
+a  { color: var(--clay); text-underline-offset: 3px; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .9em;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.mark {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-family: "Iowan Old Style", Palatino, Georgia, serif;
+  font-size: 1.02rem; color: var(--ink-soft);
+  text-decoration: none;
+  padding: 32px 0 24px;
+}
+.mark .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--clay); opacity: .8;
+}
+.updated { color: var(--ink-soft); font-size: .9rem; margin-bottom: 2.2em; }
+
+.callout {
+  background: var(--sage-soft);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin: 0 0 1.4em;
+  font-size: .95rem;
+}
+
+footer {
+  margin-top: 56px; padding-top: 22px;
+  border-top: 1px solid var(--line);
+  font-size: .89rem; color: var(--ink-soft);
+}
+footer a { color: var(--ink-soft); }
