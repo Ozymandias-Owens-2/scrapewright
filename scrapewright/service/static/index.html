@@ -150,6 +150,13 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
   font-size: 1.9rem; display: block; margin-bottom: 2px;
 }
 .pack .credits { font-size: .93rem; color: var(--ink-soft); }
+.pack .buy {
+  display: block; width: 100%; margin-top: 14px;
+  padding: 9px 0; font-size: .92rem;
+}
+.buybox { margin-top: 16px; }
+.buybox label { display: block; font-size: .93rem; margin-bottom: 10px; }
+#buy-result { margin-top: 14px; }
 .pack .name {
   font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
   color: var(--sage); font-weight: 650; margin-bottom: 10px;
@@ -290,18 +297,33 @@ footer a { color: var(--ink-soft); }
   requests, not per month. Credits do not expire, and there is no subscription.</p>
   <div class="packs" id="packs">
     <div class="card pack"><div class="name">Starter</div>
-      <span class="price">$10</span><span class="credits">10,000 rows</span></div>
+      <span class="price">$10</span><span class="credits">10,000 rows</span>
+      <button class="buy" data-pack="starter">Buy</button></div>
     <div class="card pack"><div class="name">Growth</div>
-      <span class="price">$40</span><span class="credits">50,000 rows</span></div>
+      <span class="price">$40</span><span class="credits">50,000 rows</span>
+      <button class="buy" data-pack="growth">Buy</button></div>
     <div class="card pack"><div class="name">Scale</div>
-      <span class="price">$150</span><span class="credits">250,000 rows</span></div>
+      <span class="price">$150</span><span class="credits">250,000 rows</span>
+      <button class="buy" data-pack="scale">Buy</button></div>
+  </div>
+
+  <div class="card buybox">
+    <label for="buy-key">Credits are added to an API key, so paste yours:</label>
+    <div class="demo-row">
+      <input type="text" id="buy-key" placeholder="sw_..." autocomplete="off"
+             spellcheck="false">
+    </div>
+    <p class="hint">No key yet? <a href="#get-a-key">Get one below</a> — it takes
+    one field and comes with 1,000 free rows. Your key is sent to this service
+    and to nobody else; payment itself happens on Stripe.</p>
+    <div id="buy-result" hidden></div>
   </div>
   <p class="hint">Every account gets 1,000 rows free each month. Rendering a
   JavaScript-only page costs 5, and compiling a brand-new site costs 300 — both are
   shown in your usage before you spend them.</p>
 </section>
 
-<section>
+<section id="get-a-key">
   <h2>Get a key</h2>
   <p class="lede">One field. The key appears once, so keep it somewhere.</p>
   <div class="card">
@@ -430,6 +452,53 @@ for product in sw.scrape_catalog("https://someshop.com"):
     }
   });
 
+  // ── buying ──────────────────────────────────────────────────────────────
+  // Credits belong to a key, so the page needs one before it can send anyone
+  // to Stripe. Without this the pricing section was decoration: the prices were
+  // listed and there was no way to act on them except curl.
+  const buyKey = document.getElementById('buy-key');
+  const buyOut = document.getElementById('buy-result');
+
+  function sayBuy(cls, html) {
+    buyOut.hidden = false;
+    buyOut.innerHTML = '<div class="msg ' + cls + '">' + html + '</div>';
+  }
+
+  document.querySelectorAll('.buy').forEach(function (button) {
+    button.addEventListener('click', async function () {
+      const key = buyKey.value.trim();
+      if (!key) {
+        sayBuy('warn', 'Paste your API key first — credits are added to a key, ' +
+                       'not to an email address.');
+        buyKey.focus();
+        return;
+      }
+
+      const label = button.textContent;
+      button.disabled = true;
+      button.textContent = 'One moment…';
+      try {
+        const r = await fetch('/v1/credits/checkout', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-API-Key': key},
+          body: JSON.stringify({pack: button.dataset.pack})
+        });
+        const body = await r.json();
+        if (!r.ok) {
+          sayBuy('warn', escape(body.detail || 'That did not work.'));
+          return;
+        }
+        // Stripe hosts the payment; nothing sensitive is typed on this page.
+        window.location.href = body.checkout_url;
+      } catch (err) {
+        sayBuy('warn', 'Could not reach the service. Try again in a moment.');
+      } finally {
+        button.disabled = false;
+        button.textContent = label;
+      }
+    });
+  });
+
   // ── signup ──────────────────────────────────────────────────────────────
   const sForm   = document.getElementById('signup-form');
   const sEmail  = document.getElementById('signup-email');
@@ -456,6 +525,8 @@ for product in sw.scrape_catalog("https://someshop.com"):
           '</div><code>' + escape(body.api_key) + '</code>' +
           '<p class="hint">' + escape(body.credits) +
           ' rows of credit are on it already.</p>';
+        // Save the reader from copying it back up the page to buy more.
+        buyKey.value = body.api_key;
       }
     } catch (err) {
       sOut.hidden = false;
