@@ -388,7 +388,9 @@ def test_health_reports_what_a_watchdog_needs(tmp_path):
 
     assert body["ok"] is True
     assert body["database"] is True
-    assert set(body) == {"ok", "version", "js", "database", "payments"}
+    assert set(body) == {"ok", "version", "js", "database", "payments",
+                         "stripe"}
+    assert body["stripe"] in {"live", "test", "none"}
 
 
 def test_health_says_no_when_the_database_is_gone(tmp_path, monkeypatch):
@@ -448,3 +450,26 @@ def test_the_landing_page_links_to_them(tmp_path):
 
     for path in ('href="/terms"', 'href="/refunds"', 'href="/privacy"'):
         assert path in home
+
+
+def test_health_says_which_stripe_world_it_is_wired_to(tmp_path, monkeypatch):
+    """Before believing a payment went somewhere real, an operator wants this
+    one fact -- and should not have to fight shell quoting to get it."""
+    from fastapi.testclient import TestClient
+
+    from scrapewright.service.app import create_app
+    from scrapewright.service.jobs import JobRegistry
+    from scrapewright.service.store import Store
+
+    def mode_with(value):
+        if value is None:
+            monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+        else:
+            monkeypatch.setenv("STRIPE_SECRET_KEY", value)
+        client = TestClient(create_app(store=Store(tmp_path / "h.db"),
+                                       jobs=JobRegistry()))
+        return client.get("/health").json()["stripe"]
+
+    assert mode_with(None) == "none"
+    assert mode_with("sk_test_abc") == "test"
+    assert mode_with("sk_live_abc") == "live"

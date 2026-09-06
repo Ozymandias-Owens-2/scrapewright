@@ -245,12 +245,21 @@ def create_app(store: Store | None = None,
             log.exception("health check could not reach the database")
             database = False
 
+        # Which Stripe world this instance is wired to. Answering it here means
+        # nobody has to fight shell quoting over an ssh one-liner to find out,
+        # and "live" is the single fact an operator most wants confirmed before
+        # believing a payment went anywhere real.
+        secret = os.environ.get("STRIPE_SECRET_KEY", "")
+        stripe_mode = ("live" if secret.startswith("sk_live_")
+                       else "test" if secret else "none")
+
         return {
             "ok": database,
             "version": __version__,
             "js": browser_available(),
             "database": database,
             "payments": hasattr(billing, "checkout_session"),
+            "stripe": stripe_mode,
         }
 
     @app.post("/v1/detect")
