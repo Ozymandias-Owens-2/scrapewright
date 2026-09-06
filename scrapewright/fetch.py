@@ -147,9 +147,11 @@ class BrowserFetcher:
         # Rendering is still fetching: the browser path must obey robots too,
         # and it does not go through http.get.
         from .robots import RobotsDisallowed, check
+        from .safeurl import UnsafeUrl, check_url
         try:
+            check_url(url)      # rendering is fetching, and so is a redirect
             check(url)
-        except RobotsDisallowed:
+        except (RobotsDisallowed, UnsafeUrl):
             return None
         page = self._ensure_page()
         try:
