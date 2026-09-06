@@ -1,0 +1,41 @@
+# Notices a dependency going bad before a customer does.
+#
+# Nothing here is clever: it installs what the service installs and asks
+# pip-audit whether any of it has a known hole. It runs weekly rather than on
+# every push because advisories appear on their own schedule, not ours -- a
+# dependency that was clean when merged is the normal way this bites.
+#
+# A failing run is the alert: GitHub emails on workflow failure, and public
+# repositories get Actions minutes for free.
+
+name: audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"     # Monday morning
+  workflow_dispatch:
+  push:
+    paths:
+      - "pyproject.toml"     # a dependency change deserves an immediate look
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install what the service installs
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[service,llm,excel,stripe,mcp]"
+          pip install pip-audit
+
+      - name: Any known holes?
+        run: pip-audit --progress-spinner off --strict
