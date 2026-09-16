@@ -226,7 +226,8 @@ def create_app(store: Store | None = None,
 
     for path, filename in (("/terms", "terms.html"),
                            ("/refunds", "refunds.html"),
-                           ("/privacy", "privacy.html")):
+                           ("/privacy", "privacy.html"),
+                           ("/account", "account.html")):
         app.get(path, include_in_schema=False)(_page(filename))
 
     @app.get("/health")

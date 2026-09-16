@@ -141,7 +141,9 @@ class StripeBilling:
         # meant someone who had just paid landed on a page of source code with
         # no sign the purchase worked.
         site = os.environ.get("PUBLIC_BASE_URL", DEFAULT_SITE).rstrip("/")
-        self.success_url = self.success_url or f"{site}/?paid=1"
+        # The account page, not the landing page: that is where the credits
+        # just bought can actually be seen.
+        self.success_url = self.success_url or f"{site}/account?paid=1"
         self.cancel_url = self.cancel_url or f"{site}/?paid=0"
         if self.stripe is None:
             try:

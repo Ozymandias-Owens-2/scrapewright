@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your account — scrapewright</title>
+<link rel="stylesheet" href="/static/legal.css">
+<style>
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1 1 260px; min-width: 0;
+    padding: 12px 15px; font: inherit; font-size: .97rem;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  input:focus { outline: none; border-color: var(--clay); }
+  button {
+    padding: 12px 22px; font: inherit; font-weight: 550; font-size: .97rem;
+    color: #FFFDFA; background: var(--clay); border: none; border-radius: 10px;
+    cursor: pointer;
+  }
+  button.quiet { background: none; color: var(--clay); padding: 0; font-weight: 500;
+                 text-decoration: underline; text-underline-offset: 3px; }
+  button[disabled] { opacity: .5; cursor: default; }
+  .remember { font-size: .9rem; color: var(--ink-soft); margin-top: 10px; }
+  .remember input { margin-right: 6px; }
+
+  .stats { display: grid; gap: 14px; margin: 26px 0; }
+  @media (min-width: 620px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+  .stat {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px;
+  }
+  .stat .k { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+             color: var(--ink-soft); font-weight: 650; }
+  .stat .v { font-family: "Iowan Old Style", Palatino, Georgia, serif;
+             font-size: 1.9rem; line-height: 1.2; margin-top: 4px; }
+  .stat .s { font-size: .86rem; color: var(--ink-soft); margin-top: 2px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--ink-soft); font-weight: 600; font-size: .82rem;
+       text-transform: uppercase; letter-spacing: .05em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.pos { color: #4f7a45; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+
+  .packs { display: grid; gap: 12px; margin-top: 14px; }
+  @media (min-width: 620px) { .packs { grid-template-columns: repeat(3, 1fr); } }
+  .pack { background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; text-align: center; }
+  .pack .p { font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 1.5rem; }
+  .pack .c { font-size: .88rem; color: var(--ink-soft); margin-bottom: 10px; }
+  .pack button { width: 100%; padding: 9px 0; font-size: .92rem; }
+  .msg { padding: 13px 15px; border-radius: 10px; font-size: .92rem; margin-top: 14px; }
+  .msg.warn { background: #F2E5DE; }
+  .msg.ok   { background: var(--sage-soft); }
+  @media (prefers-color-scheme: dark) { .msg.warn { background: #3A2C25; } }
+  #account { margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>Your account</h1>
+<p class="updated">Your API key is your login. Nothing else to remember, and
+nothing else to leak.</p>
+
+<div class="row">
+  <input type="text" id="key" placeholder="sw_..." autocomplete="off" spellcheck="false">
+  <button id="open">Open</button>
+</div>
+<p class="remember">
+  <label><input type="checkbox" id="remember"> Remember this key in this browser</label>
+  <span id="forget-wrap" hidden> · <button class="quiet" id="forget">forget it</button></span>
+</p>
+<div id="status"></div>
+
+<div id="account" hidden>
+  <div class="stats">
+    <div class="stat"><div class="k">Balance</div>
+      <div class="v" id="balance">—</div><div class="s" id="balance-usd"></div></div>
+    <div class="stat"><div class="k">Rows this month</div>
+      <div class="v" id="records">—</div><div class="s">1 credit each</div></div>
+    <div class="stat"><div class="k">Sites compiled</div>
+      <div class="v" id="sites">—</div><div class="s">300 credits each, once</div></div>
+  </div>
+
+  <h2>Top up</h2>
+  <p>Credits do not expire. Payment happens on Stripe; your card never touches this
+  site.</p>
+  <div class="packs">
+    <div class="pack"><div class="p">$10</div><div class="c">10,000 rows</div>
+      <button class="buy" data-pack="starter">Buy</button></div>
+    <div class="pack"><div class="p">$40</div><div class="c">50,000 rows</div>
+      <button class="buy" data-pack="growth">Buy</button></div>
+    <div class="pack"><div class="p">$150</div><div class="c">250,000 rows</div>
+      <button class="buy" data-pack="scale">Buy</button></div>
+  </div>
+  <div id="buy-status"></div>
+
+  <h2>Recent activity</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>When</th><th>What</th><th class="num">Credits</th></tr></thead>
+      <tbody id="ledger"></tbody>
+    </table>
+  </div>
+
+  <h2>Details</h2>
+  <p>Key id <code id="key-id">—</code> — quote this, never the key itself, when you
+  write in about a refund or a problem. Tier <code id="tier">—</code>.
+  This month: <span id="month-detail">—</span>.</p>
+  <p class="hint">Lost the key? It cannot be recovered — only its hash is stored.
+  Make a new one on the <a href="/#get-a-key">home page</a> with the same email
+  and write to <a href="mailto:fedordyatlov@outlook.com">fedordyatlov@outlook.com</a>
+  quoting both key ids; the balance is moved by hand.</p>
+</div>
+
+<footer>
+<a href="/">Home</a> · <a href="/terms">Terms</a> · <a href="/refunds">Refunds</a> ·
+<a href="/privacy">Privacy</a>
+</footer>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const keyInput = $('key'), remember = $('remember'), status = $('status');
+  const STORE = 'scrapewright.key';
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function say(cls, html, where) {
+    (where || status).innerHTML = html ? '<div class="msg ' + cls + '">' + html + '</div>' : '';
+  }
+  function saved() { try { return localStorage.getItem(STORE); } catch (e) { return null; } }
+  function save(k) { try { localStorage.setItem(STORE, k); } catch (e) {} }
+  function forget()  { try { localStorage.removeItem(STORE); } catch (e) {} }
+
+  async function open(key) {
+    key = key.trim();
+    if (!key) { say('warn', 'Paste your key first.'); return; }
+    $('open').disabled = true;
+    try {
+      const r = await fetch('/v1/usage', {headers: {'X-API-Key': key}});
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        say('warn', esc(b.detail || 'That key was not accepted.'));
+        $('account').hidden = true;
+        return;
+      }
+      const u = await r.json();
+      render(u);
+      say('', '');
+      if (remember.checked) save(key);
+      $('forget-wrap').hidden = !saved();
+    } catch (e) {
+      say('warn', 'Could not reach the service. Try again in a moment.');
+    } finally {
+      $('open').disabled = false;
+    }
+  }
+
+  function render(u) {
+    const c = u.credits || {};
+    $('balance').textContent = Number(c.balance || 0).toLocaleString('en-US');
+    $('balance-usd').textContent = '≈ $' + Number(c.approx_usd_value || 0).toFixed(2) + ' of rows';
+    $('records').textContent = Number((u.month || {}).records || 0).toLocaleString('en-US');
+    $('sites').textContent = Number(u.sites_compiled || (u.month || {}).syntheses || 0).toLocaleString('en-US');
+    $('key-id').textContent = u.key_id || '—';
+    $('tier').textContent = u.tier || '—';
+    const m = u.month || {};
+    $('month-detail').textContent =
+      (m.requests || 0) + ' requests, ' + (m.pages || 0) + ' pages fetched, ' +
+      (m.renders || 0) + ' rendered, ' + (m.syntheses || 0) + ' sites compiled';
+
+    const rows = (u.recent_ledger || []).map(function (e) {
+      const d = Number(e.delta || 0);
+      return '<tr><td>' + esc((e.created_at || '').replace('T', ' ').slice(0, 16)) + '</td>' +
+             '<td>' + esc(e.reason) + '</td>' +
+             '<td class="num' + (d > 0 ? ' pos' : '') + '">' +
+             (d > 0 ? '+' : '') + d.toLocaleString('en-US') + '</td></tr>';
+    }).join('');
+    $('ledger').innerHTML = rows || '<tr><td colspan="3">Nothing yet.</td></tr>';
+    $('account').hidden = false;
+  }
+
+  $('open').addEventListener('click', function () { open(keyInput.value); });
+  keyInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') open(keyInput.value); });
+  $('forget').addEventListener('click', function () {
+    forget(); remember.checked = false; $('forget-wrap').hidden = true;
+    say('ok', 'Forgotten. The key still works; this browser just no longer keeps it.');
+  });
+
+  document.querySelectorAll('.buy').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      const key = keyInput.value.trim();
+      b.disabled = true;
+      try {
+        const r = await fetch('/v1/credits/checkout', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-API-Key': key},
+          body: JSON.stringify({pack: b.dataset.pack})
+        });
+        const body = await r.json();
+        if (!r.ok) { say('warn', esc(body.detail || 'That did not work.'), $('buy-status')); return; }
+        window.location.href = body.checkout_url;
+      } catch (e) {
+        say('warn', 'Could not reach the service.', $('buy-status'));
+      } finally { b.disabled = false; }
+    });
+  });
+
+  // Arrive from a payment, or come back with a remembered key: open at once.
+  const k = saved();
+  if (k) { keyInput.value = k; remember.checked = true; open(k); }
+  const params = new URLSearchParams(location.search);
+  if (params.get('paid') === '1') {
+    say('ok', '<strong>Payment received.</strong> Credits land as soon as Stripe confirms it — a few seconds. Open your key to see them.');
+    history.replaceState(null, '', location.pathname);
+  }
+})();
+</script>
+</body>
+</html>

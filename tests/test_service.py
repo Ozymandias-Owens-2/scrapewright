@@ -425,7 +425,7 @@ def test_the_pages_a_payment_processor_asks_for_are_served(tmp_path):
 
     client = TestClient(create_app(store=Store(tmp_path / "l.db"), jobs=JobRegistry()))
 
-    for path in ("/terms", "/refunds", "/privacy"):
+    for path in ("/terms", "/refunds", "/privacy", "/account"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert "text/html" in r.headers["content-type"]
