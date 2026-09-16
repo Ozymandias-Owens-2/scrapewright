@@ -211,17 +211,25 @@ def create_app(store: Store | None = None,
     # ── endpoints ────────────────────────────────────────────────────────────
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
+    # Without a Cache-Control header browsers guess a lifetime from
+    # Last-Modified and keep serving yesterday's page after a deploy; the
+    # first person that bit was the owner. `no-cache` means revalidate, not
+    # never store -- the ETag makes an unchanged page cost one small 304.
+    PAGE_HEADERS = {"Cache-Control": "no-cache"}
+
     @app.get("/", include_in_schema=False)
     def landing() -> FileResponse:
         """The page a human lands on. Everything else here answers to machines."""
-        return FileResponse(STATIC / "index.html", media_type="text/html")
+        return FileResponse(STATIC / "index.html", media_type="text/html",
+                            headers=PAGE_HEADERS)
 
     # Terms, refunds and privacy. A payment processor will not approve a live
     # account without them, and a customer should not have to ask what happens
     # to their money or their data.
     def _page(name: str):
         def serve() -> FileResponse:
-            return FileResponse(STATIC / name, media_type="text/html")
+            return FileResponse(STATIC / name, media_type="text/html",
+                                headers=PAGE_HEADERS)
         return serve
 
     for path, filename in (("/terms", "terms.html"),
