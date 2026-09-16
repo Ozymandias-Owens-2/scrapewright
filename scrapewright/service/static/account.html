@@ -190,6 +190,11 @@ nothing else to leak.</p>
   }
 
   $('open-form').addEventListener('submit', function (e) { e.preventDefault(); open(keyInput.value); });
+  // Some keyboards (and some automation) deliver Enter without the implicit
+  // form submission that should follow it. Catch the key as well.
+  keyInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); open(keyInput.value); }
+  });
   $('forget').addEventListener('click', function () {
     forget(); remember.checked = false; $('forget-wrap').hidden = true;
     say('ok', 'Forgotten. The key still works; this browser just no longer keeps it.');
