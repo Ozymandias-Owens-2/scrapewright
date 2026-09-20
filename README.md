@@ -140,8 +140,27 @@ sets without them overwriting each other.
 
 ### Use it from an AI agent (MCP)
 
-scrapewright ships an [MCP](https://modelcontextprotocol.io) server, so an agent can
-call it as a tool instead of reading raw HTML itself:
+scrapewright speaks [MCP](https://modelcontextprotocol.io), so an agent can call it as
+a tool instead of reading raw HTML itself. Two ways in.
+
+**Hosted, nothing to install.** Point the client at the service with a key from
+[scrapewright.app](https://scrapewright.app) (1,000 free rows a month):
+
+```json
+{
+  "mcpServers": {
+    "scrapewright": {
+      "url": "https://scrapewright.app/mcp",
+      "headers": { "X-API-Key": "sw_..." }
+    }
+  }
+}
+```
+
+Tools: `detect_site`, `extract_page`, `crawl_site`, `crawl_status`, `account`. Paid
+from the same credit balance as the REST API; no model key of your own is needed.
+
+**Local, your own model key.** Run the server on your machine:
 
 ```bash
 pip install "scrapewright[mcp,llm]"

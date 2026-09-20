@@ -2,19 +2,33 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Ozymandias-Owens-2/scrapewright",
   "title": "scrapewright",
-  "description": "Give it a store URL, get structured rows. A model writes the parser once; replays are free.",
-  "version": "1.0.1",
+  "description": "Give it a URL, get structured rows. A model writes the parser once; replays are free.",
+  "version": "1.0.2",
   "websiteUrl": "https://scrapewright.app",
   "repository": {
     "url": "https://github.com/Ozymandias-Owens-2/scrapewright",
     "source": "github"
   },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://scrapewright.app/mcp",
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "description": "Your scrapewright API key. Free at https://scrapewright.app — 1,000 rows a month, no card.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "scrapewright",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "runtimeHint": "uvx",
       "runtimeArguments": [
         {
