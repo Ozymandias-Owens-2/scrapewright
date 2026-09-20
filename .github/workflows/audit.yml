@@ -34,11 +34,13 @@ jobs:
       - name: Install what the service installs
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[service,llm,excel,stripe,mcp]"
+          pip install ".[service,llm,excel,stripe,mcp]"
           pip install pip-audit
 
-      # Editable, and skipped: the package under audit is the dependencies,
-      # not us. Auditing ourselves fails in --strict whenever a version is
-      # tagged before it is uploaded, which is the normal order of a release.
+      # The package under audit is the dependencies, not us: auditing
+      # ourselves fails in --strict whenever a version is tagged before it is
+      # uploaded, which is the normal order of a release.
       - name: Any known holes?
-        run: pip-audit --progress-spinner off --strict --skip-editable
+        run: |
+          pip freeze --exclude scrapewright --exclude pip-audit > deps.txt
+          pip-audit --progress-spinner off --strict -r deps.txt
