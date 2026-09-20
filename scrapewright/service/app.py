@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -155,7 +156,19 @@ def create_app(store: Store | None = None,
     billing = billing or _default_billing()
     jobs = jobs or JobRegistry()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # The hosted MCP transport keeps a session manager that must be running
+        # for the duration of the process; mounting alone does not start it.
+        manager = getattr(app.state, "mcp_session_manager", None)
+        if manager is None:
+            yield
+        else:
+            async with manager.run():
+                yield
+
     app = FastAPI(
+        lifespan=lifespan,
         title="scrapewright",
         version=__version__,
         description="Give it a URL, it writes the scraper. "
@@ -535,4 +548,10 @@ def create_app(store: Store | None = None,
             "sites_compiled": month.syntheses,
         }
 
+    # ── the same tools, for agents that connect over HTTP ──────────────────
+    from .mcp_http import mount_hosted_mcp
+
+    mount_hosted_mcp(app, require_key=require_key, detect=detect_endpoint,
+                     extract=extract_endpoint, crawl=crawl_endpoint,
+                     job=job_endpoint, usage=usage_endpoint)
     return app

@@ -367,13 +367,16 @@ for product in sw.scrape_catalog("https://someshop.com"):
 <pre>{
   "mcpServers": {
     "scrapewright": {
-      "command": "scrapewright",
-      "args": ["mcp"]
+      "url": "https://scrapewright.app/mcp",
+      "headers": { "X-API-Key": "sw_..." }
     }
   }
 }</pre>
-  <p class="hint">Drop that into your MCP client's config and the agent gets
-  <code>detect_site</code>, <code>extract</code> and <code>crawl</code> as tools.</p>
+  <p class="hint">Nothing to install: drop that into your MCP client's config and
+  the agent gets <code>detect_site</code>, <code>extract_page</code>,
+  <code>crawl_site</code> and <code>account</code> as tools, paid from the same
+  credits. Prefer to run it yourself? <code>pip install "scrapewright[mcp,llm]"</code>
+  and use <code>"command": "scrapewright", "args": ["mcp"]</code> instead.</p>
 </section>
 
 <footer>
