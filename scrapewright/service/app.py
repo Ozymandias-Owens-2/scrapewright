@@ -228,7 +228,31 @@ def create_app(store: Store | None = None,
     # Last-Modified and keep serving yesterday's page after a deploy; the
     # first person that bit was the owner. `no-cache` means revalidate, not
     # never store -- the ETag makes an unchanged page cost one small 304.
-    PAGE_HEADERS = {"Cache-Control": "no-cache"}
+    #
+    # The CSP is for our own pages only: they load nothing from anywhere else,
+    # so the policy can say so. `unsafe-inline` because the scripts are inline;
+    # `form-action` because the buy buttons end at Stripe. /docs is left alone
+    # -- Swagger loads from a CDN and is not where a stolen key would go.
+    PAGE_HEADERS = {
+        "Cache-Control": "no-cache",
+        "Content-Security-Policy":
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; form-action 'self' https://checkout.stripe.com; "
+            "frame-ancestors 'none'; base-uri 'self'",
+    }
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Strict-Transport-Security",
+                                    "max-age=31536000; includeSubDomains")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy",
+                                    "camera=(), microphone=(), geolocation=()")
+        return response
 
     @app.get("/", include_in_schema=False)
     def landing() -> FileResponse:

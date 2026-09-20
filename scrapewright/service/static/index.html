@@ -13,6 +13,7 @@
   --ink-soft:  #736A5F;
   --line:      #EBE2D6;
   --clay:      #A8624A;
+  --on-clay:   #FFFDFA;
   --clay-soft: #F2E5DE;
   --sage:      #7C8C6F;
   --sage-soft: #E9EDE4;
@@ -27,6 +28,7 @@
     --ink-soft:  #A79C8E;
     --line:      #3A342E;
     --clay:      #D08A6E;
+    --on-clay:   #2A2118;
     --clay-soft: #3A2C25;
     --sage:      #9FB08F;
     --sage-soft: #2C332A;
@@ -72,7 +74,9 @@ section + section { border-top: 1px solid var(--line); }
   padding: 7px 14px; border: 1px solid var(--clay); border-radius: 999px;
   text-decoration: none; white-space: nowrap;
 }
-.mark .acct:hover { background: var(--clay); color: #FFFDFA; }
+.mark .acct:hover { background: var(--clay); color: var(--on-clay); }
+/* Keyboard users get the same ring inputs already have. */
+a:focus-visible, button:focus-visible { outline: 3px solid var(--clay-soft); outline-offset: 2px; }
 .mark { width: 100%; }
 .mark .dot {
   width: 10px; height: 10px; border-radius: 50%;
@@ -108,7 +112,7 @@ input:focus {
 button {
   padding: 12px 22px;
   font: inherit; font-weight: 550; font-size: .97rem;
-  color: #FFFDFA;
+  color: var(--on-clay);
   background: var(--clay);
   border: none; border-radius: 10px;
   cursor: pointer;
@@ -303,7 +307,9 @@ footer a { color: var(--ink-soft); }
 <section>
   <h2>Pricing</h2>
   <p class="lede">You pay for <strong>rows delivered</strong> — one credit each. Not for
-  requests, not per month. Credits do not expire, and there is no subscription.</p>
+  requests, not per month. Credits do not expire, and there is no subscription.
+  Prices are in US dollars before tax; Stripe adds VAT or sales tax at checkout
+  where your country requires it, and shows the total before you pay.</p>
   <div class="packs" id="packs">
     <div class="card pack"><div class="name">Starter</div>
       <span class="price">$10</span><span class="credits">10,000 rows</span>
@@ -342,6 +348,9 @@ footer a { color: var(--ink-soft); }
       <button type="submit" id="signup-go">Get 1,000 free rows</button>
     </form>
     <div class="keybox" id="signup-result" hidden></div>
+    <p class="hint">By requesting a key you agree to the <a href="/terms">terms</a>;
+    the <a href="/privacy">privacy notice</a> says what is stored (your address, only
+    as a hash) and why.</p>
   </div>
 </section>
 

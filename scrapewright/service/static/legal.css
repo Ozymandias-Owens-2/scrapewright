@@ -10,6 +10,7 @@
   --ink-soft:  #736A5F;
   --line:      #EBE2D6;
   --clay:      #A8624A;
+  --on-clay:   #FFFDFA;
   --sage-soft: #E9EDE4;
 }
 @media (prefers-color-scheme: dark) {
@@ -20,6 +21,7 @@
     --ink-soft:  #A79C8E;
     --line:      #3A342E;
     --clay:      #D08A6E;
+    --on-clay:   #2A2118;
     --sage-soft: #2C332A;
   }
 }
@@ -82,3 +84,5 @@ footer {
   font-size: .89rem; color: var(--ink-soft);
 }
 footer a { color: var(--ink-soft); }
+
+a:focus-visible, button:focus-visible { outline: 3px solid var(--clay-soft); outline-offset: 2px; }
