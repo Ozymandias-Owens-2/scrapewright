@@ -46,12 +46,18 @@ class _CountingLlm:
     inner: object
     meter: Meter
 
-    def synthesize(self, html: str, url: str, schema=None):
+    def synthesize(self, html: str, url: str, schema=None, **kwargs):
         # Counted after it returns, not before. A call that raised produced no
         # recipe and was never billed to us either, so charging a customer 300
         # credits for it is taking money for nothing.
+        #
+        # **kwargs rather than a named `rows`: this wrapper sits between the
+        # pipeline and the extractor, so an argument it has not been taught
+        # about kills the job at runtime -- which is how rows mode failed the
+        # first time it ran in production, and would happen again on the next
+        # option added upstream.
         try:
-            recipe = self.inner.synthesize(html, url, schema)
+            recipe = self.inner.synthesize(html, url, schema, **kwargs)
         except TypeError:
             # Older/injected extractors may not take a schema argument.
             recipe = self.inner.synthesize(html, url)

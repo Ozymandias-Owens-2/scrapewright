@@ -92,3 +92,21 @@ def test_the_recipe_is_paid_for_once_and_replayed(tmp_path):
 
 def test_rows_and_page_recipes_do_not_share_a_cache_entry():
     assert _rows_cache_name(SCHEMA) != SCHEMA.name
+
+
+def test_the_metering_wrapper_passes_rows_through():
+    """It sits between the pipeline and the extractor; an argument it has not
+    been taught about failed the whole job in production."""
+    from scrapewright.service.metering import Meter, _CountingLlm
+
+    seen = {}
+
+    class _Inner:
+        def synthesize(self, html, url, schema=None, *, rows=False):
+            seen["rows"] = rows
+            return RECIPE
+
+    meter = Meter()
+    _CountingLlm(_Inner(), meter).synthesize("<html></html>", "u", SCHEMA, rows=True)
+    assert seen["rows"] is True
+    assert meter.syntheses == 1
