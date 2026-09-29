@@ -110,3 +110,41 @@ def test_the_metering_wrapper_passes_rows_through():
     _CountingLlm(_Inner(), meter).synthesize("<html></html>", "u", SCHEMA, rows=True)
     assert seen["rows"] is True
     assert meter.syntheses == 1
+
+
+PAGE_TWO = LISTING.replace("Audi A4", "Audi A6").replace("BMW 320i", "BMW 520d") \
+                  .replace("Opel Corsa", "Opel Astra")
+
+
+class _Pages:
+    """Serves page 1, then page 2, then page 1 again — as a site that ignores
+    ?page= does."""
+    def __init__(self):
+        self.asked = []
+
+    def fetch(self, url):
+        self.asked.append(url)
+        return PAGE_TWO if "page=2" in url else LISTING
+
+
+def test_pagination_is_guessed_and_stops_when_rows_repeat(tmp_path):
+    pages = _Pages()
+    sw = Scrapewright(cache=RecipeCache(tmp_path / "r.json"), llm=_Llm(RECIPE),
+                      fetcher=pages)
+    rows = list(sw.crawl_rows("https://cars.test/lst", SCHEMA, max_items=100))
+    titles = [r.data["title"] for r in rows]
+    assert titles == ["Audi A4", "BMW 320i", "Opel Corsa",
+                      "Audi A6", "BMW 520d", "Opel Astra"]
+    assert "https://cars.test/lst?page=2" in pages.asked
+    # Page 3 repeats page 1, contributes nothing new, and ends the walk.
+    assert len(pages.asked) == 3
+
+
+def test_each_listing_page_is_fetched_once(tmp_path):
+    """Fetching twice per page -- once to read, once to find the next link --
+    billed the caller for a page they never saw."""
+    pages = _Pages()
+    sw = Scrapewright(cache=RecipeCache(tmp_path / "r.json"), llm=_Llm(RECIPE),
+                      fetcher=pages)
+    list(sw.crawl_rows("https://cars.test/lst", SCHEMA, max_items=3))
+    assert pages.asked == ["https://cars.test/lst"]

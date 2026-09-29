@@ -29,6 +29,7 @@ browser and the chain runs again; a recipe learned that way is tagged
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -55,6 +56,22 @@ def _rows_cache_name(schema: Schema) -> str:
     artifacts -- one names a container, the other does not -- so they must not
     share a cache entry and overwrite each other."""
     return f"{schema.name}+rows"
+
+
+def _guess_next_page(url: str, page_number: int) -> str:
+    """``?page=N`` when the markup offered no next link.
+
+    Plenty of listings paginate with a script, so the static HTML carries no
+    next link at all -- autoscout24 is one. The guess is safe because the
+    caller stops as soon as a page yields no row it has not already seen, so
+    a site that ignores the parameter and re-serves page one ends the walk
+    instead of looping.
+    """
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+             if k != "page"]
+    query.append(("page", str(page_number)))
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def _record_from_product(product: Product, schema_name: str = "product") -> Record:
@@ -248,21 +265,30 @@ class Scrapewright:
         result is the first card. This answers "what is on this page", which
         is what anyone pointing at a category actually wanted.
         """
-        cache_name = _rows_cache_name(schema)
-        recipe = self.cache.get(url, cache_name)
+        html, js_used = self._listing_html(url, _rows_cache_name(schema))
+        if html is None:
+            return []
+        return self._rows_from_html(html, url, schema,
+                                    allow_llm=allow_llm, js_used=js_used)
 
+    def _listing_html(self, url: str, cache_name: str) -> tuple[str | None, bool]:
+        """Fetch a listing once, escalating to the browser when it is a shell."""
+        recipe = self.cache.get(url, cache_name)
         html = None
         if recipe is not None and recipe.needs_js and self._can_js():
             html = self._browser_fetch(url)
         if html is None:
             html = self.fetcher.fetch(url)
-        js_used = False
         if html is None or (self._can_js() and looks_js_shelled(html)):
             rendered = self._browser_fetch(url) if self._can_js() else None
             if rendered is not None:
-                html, js_used = rendered, True
-        if html is None:
-            return []
+                return rendered, True
+        return html, False
+
+    def _rows_from_html(self, html: str, url: str, schema: Schema, *,
+                        allow_llm: bool, js_used: bool) -> list[Record]:
+        cache_name = _rows_cache_name(schema)
+        recipe = self.cache.get(url, cache_name)
 
         if recipe is not None:
             rows = SelectorExtractor(recipe, schema).extract_rows(html, url)
@@ -295,24 +321,44 @@ class Scrapewright:
         frontier = Frontier(fetcher=self.fetcher,
                             js_fetcher=self._get_browser() if self._can_js() else None,
                             max_listing_pages=max_listing_pages)
-        seen: set[str] = set()
+        cache_name = _rows_cache_name(schema)
+        visited: set[str] = set()
+        fingerprints: set[str] = set()
         count = 0
         url: str | None = listing_url
 
-        for _ in range(max_listing_pages):
-            if url is None or url in seen:
+        for page_number in range(2, max_listing_pages + 2):
+            if url is None or url in visited:
                 return
-            seen.add(url)
+            if max_items is not None and count >= max_items:
+                return       # never fetch a page whose rows cannot be used
+            visited.add(url)
+            # One fetch serves both the rows and the hunt for the next page.
+            # Fetching twice billed the caller for a page they never saw.
+            html, js_used = self._listing_html(url, cache_name)
+            if html is None:
+                return
+
             can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
-            for record in self.extract_rows(url, schema, allow_llm=can_llm):
+            fresh = 0
+            for record in self._rows_from_html(html, url, schema,
+                                               allow_llm=can_llm, js_used=js_used):
+                mark = repr(sorted((k, str(v)) for k, v in record.data.items()))
+                if mark in fingerprints:
+                    continue          # the site handed back a page we have read
+                fingerprints.add(mark)
                 if max_items is not None and count >= max_items:
                     return
                 yield record
                 count += 1
-            html = self.fetcher.fetch(url)
-            if html is None:
+                fresh += 1
+
+            # Nothing new on this page means the end, however the site chose to
+            # signal it -- an empty page, or page 9 quietly serving page 1.
+            if not fresh:
                 return
-            url = frontier._next_page(BeautifulSoup(html, "html.parser"), url)
+            url = (frontier._next_page(BeautifulSoup(html, "html.parser"), url)
+                   or _guess_next_page(url, page_number))
 
     # ── internals ────────────────────────────────────────────────────────────
     def _can_js(self) -> bool:
