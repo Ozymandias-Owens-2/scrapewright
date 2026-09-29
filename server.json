@@ -3,7 +3,7 @@
   "name": "io.github.Ozymandias-Owens-2/scrapewright",
   "title": "scrapewright",
   "description": "Give it a URL, get structured rows. A model writes the parser once; replays are free.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "websiteUrl": "https://scrapewright.app",
   "repository": {
     "url": "https://github.com/Ozymandias-Owens-2/scrapewright",
@@ -28,7 +28,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "scrapewright",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "runtimeHint": "uvx",
       "runtimeArguments": [
         {
