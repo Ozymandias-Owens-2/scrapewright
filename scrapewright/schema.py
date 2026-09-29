@@ -11,6 +11,7 @@ would define their own.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field as _dc_field
 
 # How a field's value is read once its element is found.
@@ -52,12 +53,23 @@ class Schema:
 
         This is what the CLI and the MCP tools accept, so a caller can ask for
         ``["title", "salary:number", "tags:list"]`` without importing anything.
+
+        Every caller that did not name their schema used to get the same name,
+        ``custom``, and recipes are cached per domain *and* schema name -- so
+        the second person to ask a site for a different field set silently
+        replayed the first person's recipe and got their fields back, missing
+        every field they actually asked for. The cache is shared between
+        customers, so this crossed accounts. An unnamed schema is now named
+        after its own fields.
         """
         fields = []
         for raw in names:
             part, _, kind = str(raw).partition(":")
             fields.append(Field(name=part.strip(), kind=(kind.strip() or "text")))
         req = tuple(required) if required else tuple(f.name for f in fields[:1])
+        if name == "custom":
+            spec = "|".join(f"{f.name}:{f.kind}" for f in fields)
+            name = "custom-" + hashlib.sha256(spec.encode()).hexdigest()[:10]
         return cls(name=name, fields=tuple(fields), required=req)
 
     @property
