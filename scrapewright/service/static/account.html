@@ -126,6 +126,9 @@ nothing else to leak.</p>
         <input type="number" id="crawl-scroll" value="0" min="0" max="50"></span>
       <label class="check"><input type="checkbox" id="crawl-js"> Render JavaScript
         <span class="hint">5 credits a page — needed only if the page is empty without it</span></label>
+      <label class="check"><input type="checkbox" id="crawl-rows" checked> Every card on the page is a row
+        <span class="hint">For search results, categories and tables. Untick to follow
+        links into item pages instead, where each item has its own page</span></label>
     </div>
 
     <button type="submit" id="crawl-go">Collect</button>
@@ -296,6 +299,7 @@ nothing else to leak.</p>
           fields: fieldList().length ? fieldList() : null,
           max_items: Number($('crawl-max').value) || 25,
           js: $('crawl-js').checked,
+          rows: $('crawl-rows').checked,
           scroll: Number($('crawl-scroll').value) || 0
         })
       });

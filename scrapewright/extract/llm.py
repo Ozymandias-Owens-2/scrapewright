@@ -60,6 +60,41 @@ HTML:
 ```"""
 
 
+_ROWS_PROMPT = """You are writing a reusable extractor for one web page that
+lists MANY items — a search result, a category, a table of records.
+
+Find the repeating container that wraps exactly one item, then write each
+field's selector as it appears INSIDE that container. Return ONLY a JSON
+object, no prose, with this exact shape:
+
+{{
+  "item": "<css selector matching every item container, and nothing else>",
+  "fields": {{
+{field_lines}
+  }},
+  "modes": {{
+     "<field>": "text" | "attr:<name>"
+  }}
+}}
+
+Rules:
+- "item" must match one element per item. Count them: a page showing twenty
+  results should match twenty elements — not one wrapper around all of them,
+  and not forty nested halves.
+- Field selectors are relative to a container. Write ".price", not
+  "article.card .price", and never repeat the container selector inside them.
+- Prefer stable hooks (data- attributes, itemprop, semantic classes) over
+  nth-child chains and over hashed build classes.
+- For a value that lives in an attribute — a link's href, an image's src, a
+  meta tag's content — set that field's mode to "attr:<name>".
+- Use null for any field the item does not show.
+
+HTML:
+```
+{html}
+```"""
+
+
 # Attributes that carry huge values (responsive image sets, inline styles,
 # data blobs) and contribute nothing to choosing a selector.
 _BULKY_ATTRS = ("srcset", "data-srcset", "sizes", "style", "content")
@@ -115,12 +150,14 @@ def recipe_from_text(text: str, origin: str = "",
     if not isinstance(raw_fields, dict):
         raw_fields = {k: v for k, v in data.items() if k != "modes"}
 
+    item = data.get("item")
     fields = {str(k): str(v) for k, v in raw_fields.items()
-              if v and isinstance(v, str)}
+              if v and isinstance(v, str) and k != "item"}
     if not fields:
         return None
     return SelectorRecipe(fields=fields,
                           modes={str(k): str(v) for k, v in modes.items()},
+                          item=str(item) if isinstance(item, str) else "",
                           schema_name=schema_name, origin=origin)
 
 
@@ -155,10 +192,16 @@ class LlmExtractor:
         return self._client
 
     def synthesize(self, html: str, url: str,
-                   schema: Schema = PRODUCT_SCHEMA) -> SelectorRecipe | None:
-        """Ask Claude for a recipe covering this page. One call per site."""
-        prompt = _PROMPT.format(field_lines=schema.prompt_lines(),
-                                html=reduce_html(html, cap=self.html_cap))
+                   schema: Schema = PRODUCT_SCHEMA, *,
+                   rows: bool = False) -> SelectorRecipe | None:
+        """Ask Claude for a recipe covering this page. One call per site.
+
+        ``rows`` asks for a listing recipe instead: a container selector plus
+        fields read inside it, so the page yields one record per card.
+        """
+        template = _ROWS_PROMPT if rows else _PROMPT
+        prompt = template.format(field_lines=schema.prompt_lines(),
+                                 html=reduce_html(html, cap=self.html_cap))
         client = self._get_client()
         msg = client.messages.create(
             model=self.model,

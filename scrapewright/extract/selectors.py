@@ -90,6 +90,50 @@ class SelectorExtractor(Extractor):
 
         return self.schema.coerce(values)
 
+    def extract_rows(self, html: str, url: str) -> list[Record]:
+        """One record per card, for a recipe that names an ``item`` container.
+
+        A listing page is not one thing, it is twenty. Read as a single record
+        it gave the caller either the first card or a set of parallel lists to
+        transpose by hand in a spreadsheet.
+        """
+        if not self.recipe.item:
+            record = self.extract_record(html, url)
+            return [record] if record is not None else []
+
+        soup = BeautifulSoup(html, "html.parser")
+        rows: list[Record] = []
+        for card in soup.select(self.recipe.item):
+            values = self._values_within(card, url)
+            if values:
+                rows.append(Record(url=url, schema_name=self.schema.name,
+                                   data=self.schema.coerce(values),
+                                   source_platform="selector"))
+        return rows
+
+    def _values_within(self, card, url: str) -> dict[str, Any]:
+        """Read the recipe's fields inside one card.
+
+        ``select`` on an element searches its descendants, which is what keeps
+        a field on its own row. A selector written against the whole document
+        (``article.card .price``) matches nothing *inside* a card, so each one
+        is retried on its last component.
+        """
+        values: dict[str, Any] = {}
+        for field, selector in self.recipe.fields.items():
+            if not selector or selector == self.recipe.item:
+                continue
+            mode = self.recipe.mode_for(field)
+            el = card.select_one(selector)
+            if el is None and " " in selector:
+                el = card.select_one(selector.rsplit(" ", 1)[-1])
+            value = _read(el, mode)
+            if not value:
+                continue
+            attr = mode.split(":", 1)[1] if mode.startswith("attr:") else ""
+            values[field] = urljoin(url, value) if attr in ("src", "href") else value
+        return values
+
     def extract_record(self, html: str, url: str) -> Record | None:
         values = self.extract_values(html, url)
         if not self.schema.is_satisfied_by(values):

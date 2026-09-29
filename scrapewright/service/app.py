@@ -81,6 +81,11 @@ class ExtractRequest(BaseModel):
 
 class CrawlRequest(ExtractRequest):
     max_items: int = 25
+    rows: bool = Field(
+        default=False,
+        description="The URL is a listing whose every card is a row. Walks "
+                    "pagination instead of following links into item pages, "
+                    "and returns one record per card.")
     scroll: int = Field(
         0, ge=0, le=50,
         description="For listings that load more as you scroll: how many times "
@@ -391,8 +396,9 @@ def create_app(store: Store | None = None,
         def work() -> tuple[Any, dict[str, int]]:
             sw, meter = metered_scrapewright(js=req.js,
                                              max_scrolls=req.scroll)
+            walk = sw.crawl_rows if req.rows else sw.crawl_records
             try:
-                records = list(sw.crawl_records(req.url, schema, max_items=max_items))
+                records = list(walk(req.url, schema, max_items=max_items))
             finally:
                 sw.close()
             # Only a job that finished is billed. A crawl that died partway may

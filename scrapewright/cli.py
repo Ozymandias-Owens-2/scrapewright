@@ -93,8 +93,9 @@ def cmd_run(args) -> int:
 def cmd_crawl(args) -> int:
     schema = _schema_from(args)
     with Scrapewright(js=args.js) as sw:
-        items = list(sw.crawl_records(args.url, schema, max_items=args.max,
-                                      allow_llm=not args.no_llm))
+        walk = sw.crawl_rows if getattr(args, "rows", False) else sw.crawl_records
+        items = list(walk(args.url, schema, max_items=args.max,
+                          allow_llm=not args.no_llm))
     _deliver(items, args.out, f"crawl:{schema.name}")
     if not items:
         print("nothing found — try --js if the site renders client-side",
@@ -329,6 +330,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("crawl", help="Walk a whole site from one listing/category URL")
     c.add_argument("url")
+    c.add_argument("--rows", action="store_true",
+                   help="The URL is a listing whose every card is a row. Reads "
+                        "the cards themselves and follows pagination, instead "
+                        "of following links into item pages — for sites whose "
+                        "cards have no link, and for plain tables")
     _add_common(c, listing=True)
     c.set_defaults(func=cmd_crawl)
 

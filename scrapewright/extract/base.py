@@ -40,6 +40,11 @@ class SelectorRecipe(BaseModel):
 
     fields: dict[str, str] = Field(default_factory=dict)
     modes: dict[str, str] = Field(default_factory=dict)
+    # A listing page holds one card per item. With `item` set, that selector
+    # matches the cards and every field selector is read *inside* a card, so a
+    # page of twenty cars yields twenty records instead of one. Empty keeps the
+    # original behaviour: the whole document is a single record.
+    item: str = ""
     # Which schema this recipe was synthesized against.
     schema_name: str = "product"
     # True when this recipe was synthesized from browser-rendered HTML, i.e. the

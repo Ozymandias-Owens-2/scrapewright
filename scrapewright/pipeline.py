@@ -31,6 +31,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 import requests
+from bs4 import BeautifulSoup
 
 from .cache import RecipeCache
 from .crawl import Frontier
@@ -47,6 +48,13 @@ from .validate import Coverage, coverage
 
 DEFAULT_ACCEPT_RATIO = 0.5
 DEFAULT_MAX_SYNTH_PER_RUN = 3
+
+
+def _rows_cache_name(schema: Schema) -> str:
+    """A rows recipe and a page recipe for the same fields are different
+    artifacts -- one names a container, the other does not -- so they must not
+    share a cache entry and overwrite each other."""
+    return f"{schema.name}+rows"
 
 
 def _record_from_product(product: Product, schema_name: str = "product") -> Record:
@@ -230,6 +238,81 @@ class Scrapewright:
                                          max_listing_pages=max_listing_pages):
             if record.data.get("title"):
                 yield record.to_product()
+
+    # ── Rows mode: one listing page, many records ────────────────────────────
+    def extract_rows(self, url: str, schema: Schema = PRODUCT_SCHEMA, *,
+                     allow_llm: bool = True) -> list[Record]:
+        """Every item on one listing page, as one record each.
+
+        ``extract`` answers "what is this page about", which on a search
+        result is the first card. This answers "what is on this page", which
+        is what anyone pointing at a category actually wanted.
+        """
+        cache_name = _rows_cache_name(schema)
+        recipe = self.cache.get(url, cache_name)
+
+        html = None
+        if recipe is not None and recipe.needs_js and self._can_js():
+            html = self._browser_fetch(url)
+        if html is None:
+            html = self.fetcher.fetch(url)
+        js_used = False
+        if html is None or (self._can_js() and looks_js_shelled(html)):
+            rendered = self._browser_fetch(url) if self._can_js() else None
+            if rendered is not None:
+                html, js_used = rendered, True
+        if html is None:
+            return []
+
+        if recipe is not None:
+            rows = SelectorExtractor(recipe, schema).extract_rows(html, url)
+            if rows:
+                return rows
+            # A recipe that matches nothing is stale, not authoritative.
+
+        if not allow_llm:
+            return []
+        self._synth_calls += 1
+        recipe = self.llm.synthesize(html, url, schema, rows=True)
+        if recipe is None or not recipe.item:
+            return []
+        recipe.needs_js = js_used
+        rows = SelectorExtractor(recipe, schema).extract_rows(html, url)
+        if rows:
+            # Only a recipe that produced something is worth replaying.
+            self.cache.put(url, recipe, cache_name)
+        return rows
+
+    def crawl_rows(self, listing_url: str, schema: Schema = PRODUCT_SCHEMA, *,
+                   max_items: int | None = None, allow_llm: bool = True,
+                   max_listing_pages: int = 5) -> Iterator[Record]:
+        """Rows from a listing, following its pagination.
+
+        The first page pays for a recipe; every page after it replays that
+        recipe for nothing, which is the same bargain as the rest of the tool.
+        """
+        self._synth_calls = 0
+        frontier = Frontier(fetcher=self.fetcher,
+                            js_fetcher=self._get_browser() if self._can_js() else None,
+                            max_listing_pages=max_listing_pages)
+        seen: set[str] = set()
+        count = 0
+        url: str | None = listing_url
+
+        for _ in range(max_listing_pages):
+            if url is None or url in seen:
+                return
+            seen.add(url)
+            can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
+            for record in self.extract_rows(url, schema, allow_llm=can_llm):
+                if max_items is not None and count >= max_items:
+                    return
+                yield record
+                count += 1
+            html = self.fetcher.fetch(url)
+            if html is None:
+                return
+            url = frontier._next_page(BeautifulSoup(html, "html.parser"), url)
 
     # ── internals ────────────────────────────────────────────────────────────
     def _can_js(self) -> bool:
