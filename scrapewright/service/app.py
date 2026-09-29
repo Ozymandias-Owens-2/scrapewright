@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import tempfile
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,7 @@ from pydantic import BaseModel, Field
 from .. import __version__
 from ..detect import detect
 from ..pipeline import Scrapewright
+from ..export import write_any
 from ..models import Record
 from ..schema import PRODUCT_SCHEMA, Schema
 from .billing import BillingProvider, NoopBilling
@@ -415,6 +418,49 @@ def create_app(store: Store | None = None,
         if job is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
         return job.as_dict()
+
+    @app.get("/v1/jobs/{job_id}/download")
+    def job_download(job_id: str, format: str = "csv",
+                     key: ApiKey = Depends(require_key)) -> FileResponse:
+        """A finished crawl as a file, so the rows can leave as a spreadsheet.
+
+        The JSON at ``/v1/jobs/{id}`` is what a program wants. A person wants
+        a file they can open, and until this existed the only way to get one
+        was to run the CLI yourself -- which left anyone who bought credits
+        and opened a browser with no way to collect what they paid for.
+        """
+        suffix = {"csv": ".csv", "xlsx": ".xlsx", "jsonl": ".jsonl"}.get(format)
+        if suffix is None:
+            raise HTTPException(400, "format must be csv, xlsx or jsonl")
+
+        job = jobs.get(job_id, key_id=key.id)
+        if job is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
+        if job.status != "done":
+            raise HTTPException(409, f"that job is {job.status}, not done")
+
+        rows = (job.result or {}).get("records") or []
+        if not rows:
+            raise HTTPException(404, "that job found nothing to download")
+
+        # The job holds payload dicts, not models: rebuild just enough Record
+        # for the writer, which knows how to lay out an unknown field set.
+        records = [Record(url=r.get("url", ""),
+                          schema_name=r.get("schema", "custom"),
+                          data=r.get("data") or {},
+                          source_platform=r.get("source"))
+                   for r in rows]
+        # Written to a file rather than streamed: openpyxl builds a zip, and
+        # the result is small -- a job is capped at what the caller can pay for.
+        path = Path(tempfile.gettempdir()) / f"scrapewright-{job_id}{suffix}"
+        try:
+            write_any(records, path)
+        except ImportError as e:      # xlsx without openpyxl in the image
+            raise HTTPException(503, f"{format} export is unavailable here: {e}") from e
+
+        stamp = time.strftime("%Y-%m-%d")
+        return FileResponse(path, filename=f"scrapewright-{stamp}{suffix}",
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/jobs")
     def jobs_endpoint(key: ApiKey = Depends(require_key)) -> dict[str, Any]:

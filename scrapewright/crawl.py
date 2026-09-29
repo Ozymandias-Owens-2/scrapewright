@@ -31,8 +31,20 @@ from bs4 import BeautifulSoup
 from .fetch import StaticFetcher, looks_js_shelled
 
 PRODUCT_PATH = re.compile(r"/(?:products?|item|itm|prod|p)/[^/?#]+/?$", re.IGNORECASE)
+# A directory index is the page *for* its directory, not a page of its own.
+# Static generators -- Jekyll, Hugo, and every catalogue exported to flat
+# files -- serve items as `/thing/index.html`, which defeated both heuristics
+# below: the pattern looked for a slug and found a filename, and the grouping
+# read each item's own directory as the template, so every group held one
+# member and the crawl came back empty.
+INDEX_FILE = re.compile(r"/index\.[a-z0-9]{1,5}$", re.IGNORECASE)
 NEXT_LABELS = {"next", "next page", "›", "»", "→", ">", "older"}
 MIN_GROUP = 3
+
+
+def _item_path(href: str) -> str:
+    """The path that identifies an item, with any directory index removed."""
+    return INDEX_FILE.sub("", urlparse(href).path.rstrip("/")) or "/"
 
 
 class Frontier:
@@ -107,7 +119,7 @@ class Frontier:
         links = self._same_host_links(soup, base_url)
 
         # 1) Path-pattern match — the cheap, high-precision route.
-        matched = [href for href, _ in links if PRODUCT_PATH.search(urlparse(href).path)]
+        matched = [href for href, _ in links if PRODUCT_PATH.search(_item_path(href))]
         if matched:
             return matched
 
@@ -117,8 +129,7 @@ class Frontier:
         for href, a in links:
             if a.find("img") is None:
                 continue
-            path = urlparse(href).path.rstrip("/")
-            parent = path.rsplit("/", 1)[0] or "/"
+            parent = _item_path(href).rsplit("/", 1)[0] or "/"
             groups[parent].append(href)
 
         if not groups:

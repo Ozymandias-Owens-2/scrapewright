@@ -54,6 +54,24 @@
   .pack button { width: 100%; padding: 9px 0; font-size: .92rem; }
   .msg { padding: 13px 15px; border-radius: 10px; font-size: .92rem; margin-top: 14px; }
   .msg.warn { background: #F2E5DE; }
+  #crawl-form label { display: block; font-size: .86rem; font-weight: 650;
+                      color: var(--ink-soft); margin: 14px 0 5px; }
+  #crawl-form input[type=url], #crawl-form input[type=text] { width: 100%; }
+  #crawl-form input[type=number] { width: 7em; }
+  #crawl-form .hint { margin-top: 6px; }
+  .opts { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start;
+          margin-top: 6px; }
+  .opts label.check { display: flex; align-items: baseline; gap: 7px;
+                      font-weight: 500; color: var(--ink); max-width: 30em; }
+  .opts label.check .hint { display: block; margin: 2px 0 0; }
+  .opts label.check input { flex: none; }
+  #crawl-go { margin-top: 18px; }
+  .dls button { flex: 1 1 auto; white-space: nowrap; }
+  .spin { display: inline-block; width: 11px; height: 11px; margin-right: 8px;
+          border: 2px solid var(--clay); border-right-color: transparent;
+          border-radius: 50%; animation: turn .8s linear infinite; }
+  @keyframes turn { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
   .msg.ok   { background: var(--sage-soft); }
   @media (prefers-color-scheme: dark) { .msg.warn { background: #3A2C25; } }
   #account { margin-top: 8px; }
@@ -85,6 +103,42 @@ nothing else to leak.</p>
       <div class="v" id="records">—</div><div class="s">1 credit each</div></div>
     <div class="stat"><div class="k">Sites compiled</div>
       <div class="v" id="sites">—</div><div class="s">300 credits each, once</div></div>
+  </div>
+
+  <h2>Collect data</h2>
+  <p>Give it a page that lists things — a category, a search result, a table — and
+  say which fields you want. The first page of a new site is compiled once
+  (300 credits); every row after that costs one.</p>
+  <form id="crawl-form">
+    <label for="crawl-url">Listing URL</label>
+    <input type="url" id="crawl-url" required placeholder="https://someshop.com/collections/all">
+
+    <label for="crawl-fields">Fields</label>
+    <input type="text" id="crawl-fields" placeholder="title, price:number, rating">
+    <p class="hint">Comma-separated. Add <code>:number</code> to get a number back,
+    <code>:list</code> for a field that repeats. Leave it empty for the built-in
+    product fields.</p>
+
+    <div class="opts">
+      <span><label for="crawl-max">Rows</label>
+        <input type="number" id="crawl-max" value="25" min="1" max="1000"></span>
+      <span><label for="crawl-scroll">Scrolls</label>
+        <input type="number" id="crawl-scroll" value="0" min="0" max="50"></span>
+      <label class="check"><input type="checkbox" id="crawl-js"> Render JavaScript
+        <span class="hint">5 credits a page — needed only if the page is empty without it</span></label>
+    </div>
+
+    <button type="submit" id="crawl-go">Collect</button>
+  </form>
+  <div id="crawl-status"></div>
+  <div id="crawl-done" hidden>
+    <p><strong id="crawl-count"></strong> <span id="crawl-cost"></span></p>
+    <div class="row dls">
+      <button type="button" class="dl" data-format="csv">Download CSV</button>
+      <button type="button" class="dl" data-format="xlsx">Excel</button>
+      <button type="button" class="dl" data-format="jsonl">JSONL</button>
+    </div>
+    <p class="hint">Results are kept for an hour. Download what you need before then.</p>
   </div>
 
   <h2>Top up</h2>
@@ -198,6 +252,100 @@ nothing else to leak.</p>
   $('forget').addEventListener('click', function () {
     forget(); remember.checked = false; $('forget-wrap').hidden = true;
     say('ok', 'Forgotten. The key still works; this browser just no longer keeps it.');
+  });
+
+  // ── collect data ────────────────────────────────────────────────────────
+  // The key travels in a header, never in the URL: a download link carrying
+  // ?key=... would sit in browser history, in any proxy's log, and in the
+  // Referer of whatever the user opened next.
+  let jobId = null;
+
+  function fieldList() {
+    return $('crawl-fields').value.split(',')
+      .map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  async function poll(id, key) {
+    for (;;) {
+      await new Promise(function (r) { setTimeout(r, 2000); });
+      const r = await fetch('/v1/jobs/' + encodeURIComponent(id),
+                            {headers: {'X-API-Key': key}});
+      if (!r.ok) throw new Error('lost track of that job');
+      const job = await r.json();
+      if (job.status === 'done') return job;
+      if (job.status === 'error') throw new Error(job.error || 'the crawl failed');
+      say('', '<span class="spin"></span>Working — ' + esc(job.status) +
+              '. You can leave this page open.', $('crawl-status'));
+    }
+  }
+
+  $('crawl-form').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const key = keyInput.value.trim();
+    if (!key) { say('warn', 'Open your key first.', $('crawl-status')); return; }
+    $('crawl-go').disabled = true;
+    $('crawl-done').hidden = true;
+    jobId = null;
+    say('', '<span class="spin"></span>Starting…', $('crawl-status'));
+    try {
+      const r = await fetch('/v1/crawl', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-API-Key': key},
+        body: JSON.stringify({
+          url: $('crawl-url').value.trim(),
+          fields: fieldList().length ? fieldList() : null,
+          max_items: Number($('crawl-max').value) || 25,
+          js: $('crawl-js').checked,
+          scroll: Number($('crawl-scroll').value) || 0
+        })
+      });
+      const started = await r.json();
+      if (!r.ok) { say('warn', esc(started.detail || 'That did not start.'), $('crawl-status')); return; }
+      const job = await poll(started.job_id, key);
+      jobId = started.job_id;
+      const count = (job.result || {}).count || 0;
+      const spent = (job.usage || {}).credits_spent;
+      $('crawl-count').textContent = count.toLocaleString('en-US') +
+        (count === 1 ? ' row' : ' rows');
+      $('crawl-cost').textContent = spent ? '· ' + spent.toLocaleString('en-US') + ' credits' : '';
+      say(count ? '' : 'warn',
+          count ? '' : 'Nothing came back. Try a page that lists items, or tick ' +
+                       'Render JavaScript if the page is empty without it.',
+          $('crawl-status'));
+      $('crawl-done').hidden = !count;
+      open(key);                       // balance and ledger have moved
+    } catch (err) {
+      say('warn', esc(err.message || 'Something went wrong.'), $('crawl-status'));
+    } finally {
+      $('crawl-go').disabled = false;
+    }
+  });
+
+  document.querySelectorAll('.dl').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      if (!jobId) return;
+      const key = keyInput.value.trim();
+      b.disabled = true;
+      try {
+        const r = await fetch('/v1/jobs/' + encodeURIComponent(jobId) +
+                              '/download?format=' + b.dataset.format,
+                              {headers: {'X-API-Key': key}});
+        if (!r.ok) {
+          const body = await r.json().catch(function () { return {}; });
+          say('warn', esc(body.detail || 'That download failed.'), $('crawl-status'));
+          return;
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'scrapewright.' + b.dataset.format;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } finally { b.disabled = false; }
+    });
   });
 
   document.querySelectorAll('.buy').forEach(function (b) {

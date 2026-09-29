@@ -225,7 +225,11 @@ curl -X POST localhost:8000/v1/extract   -H "X-API-Key: sw_..." -H "Content-Type
 | `POST /v1/extract` | one page -> structured record |
 | `POST /v1/crawl` | a whole site -> job id (crawls outlive a request) |
 | `GET /v1/jobs/{id}` | poll a crawl |
+| `GET /v1/jobs/{id}/download?format=csv\|xlsx\|jsonl` | the finished crawl as a file |
 | `GET /v1/usage` | what this key has consumed, against its plan |
+
+Or skip the API: [scrapewright.app/account](https://scrapewright.app/account) takes a
+listing URL and a field list, runs the crawl, and hands back the spreadsheet.
 
 #### Prepaid credits, no subscription
 
