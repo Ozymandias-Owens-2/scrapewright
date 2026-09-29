@@ -95,10 +95,18 @@ def _write_csv(rows: list[dict], columns: list[str], path: Path) -> None:
         writer.writerows(rows)
 
 
+def _json_default(value):
+    """`default=str` quoted every parsed number back into a string, which
+    undoes the point of declaring a field `number`. JSON has doubles."""
+    from decimal import Decimal
+
+    return float(value) if isinstance(value, Decimal) else str(value)
+
+
 def _write_jsonl(payload: list[dict], path: Path) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for item in payload:
-            f.write(json.dumps(item, default=str, ensure_ascii=False) + "\n")
+            f.write(json.dumps(item, default=_json_default, ensure_ascii=False) + "\n")
 
 
 def _write_xlsx(rows: list[dict], columns: list[str], path: Path) -> None:

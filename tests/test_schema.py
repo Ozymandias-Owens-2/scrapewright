@@ -1,6 +1,8 @@
 """Schema-agnostic extraction: the same compile-once/replay-free loop, aimed
 at whatever fields the caller declares."""
 
+from decimal import Decimal
+
 import pytest
 
 from scrapewright.cache import RecipeCache, cache_key
@@ -75,7 +77,9 @@ def test_selector_replay_with_custom_fields():
     assert record.schema_name == "job"
     assert record.data["title"] == "Backend Engineer"
     assert record.data["company"] == "Nordwind"
-    assert record.data["salary"] == "€72,000"
+    # `salary:number` is a number now; the page's own wording is kept beside it.
+    assert record.data["salary"] == Decimal("72000")
+    assert record.data["salary_text"] == "€72,000"
     assert record.data["tags"] == ["python", "postgres"]
 
 

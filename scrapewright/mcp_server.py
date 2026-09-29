@@ -48,11 +48,27 @@ def _product_payload(p: Product) -> dict[str, Any]:
     return data
 
 
+def _jsonable(value):
+    """A Decimal is not JSON, and str() would undo the parsing we just did.
+
+    Fields declared ``number`` arrive here as Decimal. Serialising them the
+    old way -- anything not a builtin becomes str() -- would hand the caller
+    back "52.15" in quotes, which is the string they asked us not to send.
+    JSON has only doubles, so a double is what they get.
+    """
+    from decimal import Decimal
+
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (list, str, bool, int, float)) or value is None:
+        return value
+    return str(value)
+
+
 def _record_payload(r: Record) -> dict[str, Any]:
     return {"url": r.url, "schema": r.schema_name,
             "source": r.source_platform,
-            "data": {k: (str(v) if not isinstance(v, (list, str, bool, int, float)) else v)
-                     for k, v in r.data.items()}}
+            "data": {k: _jsonable(v) for k, v in r.data.items()}}
 
 
 def _schema_for(fields: list[str] | None) -> Schema:

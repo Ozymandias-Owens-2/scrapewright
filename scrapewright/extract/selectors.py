@@ -50,8 +50,12 @@ class SelectorExtractor(Extractor):
         self.schema = schema
 
     def extract_values(self, html: str, url: str) -> dict[str, Any]:
-        """Pull every field the recipe knows about. Values are raw strings
-        (or lists of URLs); typing is the caller's job."""
+        """Pull every field the recipe knows about.
+
+        Text and lists come back as the page wrote them; fields declared
+        ``number`` are parsed, with the original kept alongside. See
+        :meth:`Schema.coerce`.
+        """
         soup = BeautifulSoup(html, "html.parser")
         list_fields = self.schema.list_fields
         values: dict[str, Any] = {}
@@ -84,7 +88,7 @@ class SelectorExtractor(Extractor):
                 if value:
                     values[field] = value
 
-        return values
+        return self.schema.coerce(values)
 
     def extract_record(self, html: str, url: str) -> Record | None:
         values = self.extract_values(html, url)

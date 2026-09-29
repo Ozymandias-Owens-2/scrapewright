@@ -71,6 +71,38 @@ class Schema:
     def get(self, name: str) -> Field | None:
         return next((f for f in self.fields if f.name == name), None)
 
+    def coerce(self, values: dict) -> dict:
+        """Turn ``number`` fields into numbers, keeping what the page said.
+
+        Declaring ``price:number`` used to change only the wording of the
+        synthesis prompt: the value still came back as ``"£52.15"``, a string
+        with a currency symbol, which is not what the caller asked for. Now
+        the kind is honoured.
+
+        The original text is kept under ``<field>_text`` whenever it carried
+        more than the digits -- the currency, the unit, the "approx." -- since
+        that is information the page had and a bare number does not. A value
+        that will not parse is left exactly as it was found rather than
+        dropped: a half-read field beats a missing one.
+        """
+        from .models import parse_price   # a money parser reads any number
+
+        out = dict(values)
+        for f in self.fields:
+            if f.kind != "number" or f.name not in out:
+                continue
+            raw = out[f.name]
+            if not isinstance(raw, str):
+                continue
+            number = parse_price(raw)
+            if number is None:
+                continue
+            out[f.name] = number
+            if raw.strip() != str(number):
+                out[f"{f.name}_text"] = raw
+
+        return out
+
     def is_satisfied_by(self, values: dict) -> bool:
         """A record is usable when every required field came back non-empty."""
         return all(values.get(name) for name in self.required)

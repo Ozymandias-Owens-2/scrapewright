@@ -134,9 +134,18 @@ record = Scrapewright().extract("https://jobs.example.com/p/123", job)
 print(record.data)   # {'title': ..., 'company': ..., 'salary': ..., 'tags': [...]}
 ```
 
-Field kinds are `text` (default), `number`, `url`, and `list`. Recipes are cached
-per site *and* per schema, so one domain can be compiled against several field
-sets without them overwriting each other.
+Field kinds are `text` (default), `number`, `url`, and `list`. A `number` field is
+parsed out of whatever the page wrote — `"£51.77"`, `"1.250,00"`, `"€72,000"` all
+become numbers — and when the page said more than the digits, the original is kept
+next to it as `<field>_text`:
+
+```json
+{ "price": 51.77, "price_text": "£51.77" }
+```
+
+A value that holds no number at all ("call us") is left as the page wrote it rather
+than dropped. Recipes are cached per site *and* per schema, so one domain can be
+compiled against several field sets without them overwriting each other.
 
 ### Use it from an AI agent (MCP)
 
