@@ -25,3 +25,18 @@ def test_product_usability():
     missing_price = Product(url="u", title="Coat")
     assert not missing_price.is_usable()
     assert missing_price.core_fields_present() == {"title": True, "price": False, "url": True}
+
+
+def test_a_three_digit_tail_is_a_thousands_group_not_a_fraction():
+    """A Dutch car listing writes 5950 euro as "€ 5.950"; reading that dot as
+    a decimal point priced a real car at 5.95."""
+    assert parse_price("€ 5.950") == Decimal("5950")
+    assert parse_price("€ 129.900") == Decimal("129900")
+    assert parse_price("€1.234.567") == Decimal("1234567")
+    assert parse_price("1,234") == Decimal("1234")
+
+
+def test_other_tails_stay_fractions():
+    assert parse_price("47.82") == Decimal("47.82")
+    assert parse_price("0.5") == Decimal("0.5")
+    assert parse_price("1234.5678") == Decimal("1234.5678")   # too long to group

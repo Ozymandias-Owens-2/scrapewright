@@ -26,6 +26,18 @@ def parse_price(value: Any) -> Decimal | None:
     Handles ``"1,250.00"`` (US), ``"1.250,00"`` (EU), ``"€1 250"`` and bare
     numbers. Rule of thumb: when both ``,`` and ``.`` appear, whichever comes
     *last* is the decimal separator and the other is a thousands separator.
+
+    When only one kind appears, the size of the last group decides, and the
+    two kinds are read the same way. **Exactly three digits after a single
+    separator means thousands** -- a Dutch listing writes five thousand nine
+    hundred and fifty euro as ``"€ 5.950"``, and reading that dot as a decimal
+    point turned a 5,950 euro car into a 5.95 euro one on a real export.
+    Anything else -- one, two, or four-plus digits -- is a fraction, because
+    a thousands group is always exactly three.
+
+    The cost of the rule is that ``"1.234 kg"`` reads as 1234. Money is what
+    this parses, and in money a three-digit tail is a thousands group far more
+    often than a millikilogram.
     """
     if value is None or value == "":
         return None
@@ -45,9 +57,15 @@ def parse_price(value: Any) -> Decimal | None:
             s = s.replace(".", "").replace(",", ".")
         else:
             s = s.replace(",", "")
-    elif "," in s:
-        # Single comma followed by exactly 2 digits → decimal, else thousands.
-        s = s.replace(",", ".") if re.fullmatch(r"\d+,\d{2}", s) else s.replace(",", "")
+    else:
+        for sep in (",", "."):
+            if sep not in s:
+                continue
+            # More than one of them can only be grouping: 1.234.567.
+            if s.count(sep) > 1 or re.fullmatch(rf"\d+\{sep}\d{{3}}", s):
+                s = s.replace(sep, "")
+            else:
+                s = s.replace(sep, ".")
 
     try:
         return Decimal(s)
