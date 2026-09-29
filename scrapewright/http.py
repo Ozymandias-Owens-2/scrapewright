@@ -29,6 +29,36 @@ def make_session() -> requests.Session:
     return s
 
 
+def _decoded(response):
+    """Believe the bytes over the header when the header never said anything.
+
+    For ``text/*`` with no charset, requests falls back to ISO-8859-1 as HTTP
+    1.1 once required. Most of the web is UTF-8 and says so only in a <meta>
+    tag, so that default turns every pound sign and accent into mojibake --
+    books.toscrape.com serves UTF-8 under a bare ``text/html`` and a price came
+    back as a run of Latin-1 gibberish.
+
+    The test is a strict UTF-8 decode rather than statistical detection:
+    UTF-8 is self-validating, so a body that decodes cleanly essentially is
+    UTF-8, while a detector handed a short page will cheerfully answer Big5.
+    Anything that fails the decode keeps whatever requests worked out.
+    """
+    headers = getattr(response, "headers", None) or {}
+    if "charset=" in headers.get("content-type", "").lower():
+        return response                      # the server was explicit; obey it
+    try:
+        response.content.decode("utf-8")
+    except (UnicodeDecodeError, AttributeError):
+        return response
+    except Exception:                        # a test double without .content
+        return response
+    try:
+        response.encoding = "utf-8"
+    except Exception:
+        pass
+    return response
+
+
 def get(url: str, session: requests.Session | None = None, **kw) -> requests.Response:
     """Fetch a URL, unless the site's robots.txt says not to.
 
@@ -58,7 +88,7 @@ def get(url: str, session: requests.Session | None = None, **kw) -> requests.Res
         headers = getattr(response, "headers", None) or {}
         location = headers.get("location") if redirecting else None
         if not location:
-            return response
+            return _decoded(response)
         url = urljoin(url, location)
         check_url(url)
         response.close()
