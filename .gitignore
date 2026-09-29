@@ -28,3 +28,4 @@ promo/
 *.db
 smoke.db
 .claude/
+scratchpad/
