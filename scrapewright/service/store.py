@@ -341,6 +341,25 @@ class Store:
     def recent_signups(self, ip: str, hours: int = 24) -> int:
         return self.count_events(ip, "signup", hours)
 
+    def has_been_topped_up(self, key_id: str) -> bool:
+        """Has this key ever been given credits by anyone but the clock?
+
+        What separates a stranger from a customer, and the answer decides
+        which tier they are on: everything a free account can do has to cost
+        us nothing, because an account costs nothing to create.
+
+        Any positive grant counts except the monthly free allowance -- a
+        Stripe payment, and equally a gift issued by hand, which would
+        otherwise leave the person it was given to stuck on the free tier.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM credit_ledger WHERE key_id = ? AND delta > 0 "
+                "AND (idempotency_key IS NULL OR idempotency_key NOT LIKE 'free:%') "
+                "LIMIT 1", (key_id,),
+            ).fetchone()
+        return row is not None
+
     def grant_exists(self, idempotency_key: str) -> bool:
         """Has this exact payment already been credited?
 

@@ -16,6 +16,7 @@ a caller can never be charged for a request that was refused.
 from __future__ import annotations
 
 import logging
+import ipaddress
 import os
 import re
 import tempfile
@@ -51,15 +52,47 @@ STATIC = Path(__file__).parent / "static"
 # than the little it would buy.
 EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 # Enough for a developer trying the service from one office; not enough to farm
-# the free tier from one machine.
+# the free tier from one machine. Counted per network rather than per address:
+# a single machine can hold a /64 of IPv6 addresses, so counting exact
+# addresses is counting nothing.
 MAX_SIGNUPS_PER_DAY = 3
+
+
+def _signup_network(raw_ip: str) -> str:
+    """The network a signup came from: a /24 of IPv4, a /64 of IPv6.
+
+    One host is routinely handed a whole IPv6 /64, so "three keys per address"
+    means three keys per address the farmer bothers to type. Widening to the
+    network makes rotation cost a proxy rather than a loop.
+    """
+    try:
+        address = ipaddress.ip_address(raw_ip)
+    except ValueError:
+        return raw_ip
+    prefix = 24 if address.version == 4 else 64
+    return str(ipaddress.ip_network(f"{address}/{prefix}", strict=False))
+
+
+# Addresses that exist to be thrown away. Not a defence on its own -- the list
+# is endless and anyone determined registers a domain -- but it turns the
+# laziest farming into work, and costs one set lookup.
+DISPOSABLE_EMAIL_DOMAINS = frozenset({
+    "10minutemail.com", "20minutemail.com", "guerrillamail.com",
+    "guerrillamail.info", "sharklasers.com", "grr.la", "mailinator.com",
+    "maildrop.cc", "yopmail.com", "yopmail.fr", "temp-mail.org",
+    "tempmail.com", "tempmailo.com", "throwawaymail.com", "trashmail.com",
+    "getnada.com", "nada.email", "dispostable.com", "fakeinbox.com",
+    "mohmal.com", "emailondeck.com", "mintemail.com", "spamgourmet.com",
+    "moakt.com", "tmpmail.org", "luxusmail.org", "byom.de", "mailnesia.com",
+    "inboxkitten.com", "harakirimail.com", "disposablemail.com",
+})
 # The public demo runs without a key, so it has to be free for us to serve:
 # it only accepts sites with a catalogue API, where no model is ever called.
 MAX_DEMOS_PER_DAY = 5
 DEMO_MAX_RECORDS = 5
 from .credits import (FREE_MONTHLY_CREDITS, PACKS, PACKS_BY_NAME,
                       credits_for, describe_costs)
-from .plans import DEFAULT_TIER, get_tier
+from .plans import DEFAULT_TIER, TIERS, get_tier
 from .pricing import value_of
 from .store import ApiKey, Store, Usage
 
@@ -278,15 +311,35 @@ def create_app(store: Store | None = None,
         store.ensure_free_allowance(key.id, FREE_MONTHLY_CREDITS)
         return store.balance(key.id)
 
-    def enforce_quota(key: ApiKey) -> int:
+    def tier_for(key: ApiKey):
+        """A key that has never been paid for is on the free tier.
+
+        The plan on the key still wins when it says something explicit
+        (`unlimited` for self-hosting, a grandfathered plan). Otherwise the
+        tier follows whether credits have ever been bought or granted: an
+        email address costs nothing to invent, so an account nobody has paid
+        for must cost us nothing to serve.
+        """
+        named = billing.plan_for(key)
+        if named in TIERS and named != DEFAULT_TIER:
+            return get_tier(named)
+        topped_up = store.has_been_topped_up(key.id)
+        return get_tier(DEFAULT_TIER if topped_up else "free")
+
+    def enforce_quota(key: ApiKey, *, js: bool = False) -> int:
         """Refuse before any work happens. Returns the credits available."""
-        tier = get_tier(billing.plan_for(key))
+        tier = tier_for(key)
         if not tier.metered:
             return 10**9   # self-hosted: metered for visibility, never refused
 
-        breach = tier.daily_synthesis_limit_hit(store.usage_for_day(key.id).syntheses)
+        today = store.usage_for_day(key.id)
+        breach = tier.daily_synthesis_limit_hit(today.syntheses)
         if breach:
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, breach)
+        if js:
+            breach = tier.daily_render_limit_hit(today.renders)
+            if breach:
+                raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, breach)
 
         balance = available_credits(key)
         if balance <= 0:
@@ -302,7 +355,7 @@ def create_app(store: Store | None = None,
         countable = {k: v for k, v in usage.items()
                      if k in Usage.__dataclass_fields__}
         spent = credits_for(Usage(**countable))
-        if spent and get_tier(billing.plan_for(key)).metered:
+        if spent and tier_for(key).metered:
             store.spend(key.id, spent, reason)
         billing.report_usage(key, usage)
         return spent
@@ -413,7 +466,7 @@ def create_app(store: Store | None = None,
                          key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """One page in, one structured record out."""
         _reject_unusable_url(req.url)
-        enforce_quota(key)
+        enforce_quota(key, js=req.js)
         schema = _schema_for(req.fields)
         sw, meter = metered_scrapewright(js=req.js)
         try:
@@ -449,13 +502,13 @@ def create_app(store: Store | None = None,
                        key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """Walk a whole site. Returns a job id — crawls outlive a request."""
         _reject_unusable_url(req.url)
-        balance = enforce_quota(key)
+        balance = enforce_quota(key, js=req.js)
         # `rows: true` shipped a day before `mode` did, and somebody's script
         # may still send it.
         mode = "rows" if req.rows else req.mode
         if mode not in ("links", "rows", "like"):
             raise HTTPException(400, "mode must be links, rows or like")
-        tier = get_tier(billing.plan_for(key))
+        tier = tier_for(key)
         # A record costs one credit, so the balance is itself an item cap: the
         # job stops at what the caller can pay for instead of overdrawing.
         max_items = min(req.max_items, tier.max_items_per_job,
@@ -606,16 +659,23 @@ def create_app(store: Store | None = None,
         email rather than the key, so a second signup at the same address gets
         nothing, and one address can only take a few keys a day.
 
-        Deliberately no email verification yet. It would be the honest third
-        guard, and it needs a mail sender this deployment does not have; until
-        then the endpoint is cheap to abuse and expensive to abuse *at scale*,
-        which is the trade being made knowingly.
+        Deliberately no email verification: it needs a mail sender this
+        deployment does not have, and a throwaway inbox defeats it anyway. The
+        defence that actually holds is elsewhere -- a free account is on a
+        tier that cannot spend our money (see `plans.py`), so farming a
+        thousand of them yields a thousand accounts that can each compile one
+        site a day and render twenty pages.
         """
         email = req.email.strip()
         if not EMAIL_RE.fullmatch(email):
             raise HTTPException(400, "that does not look like an email address")
+        if email.rsplit("@", 1)[-1].lower() in DISPOSABLE_EMAIL_DOMAINS:
+            raise HTTPException(
+                400, "that is a disposable address. The free allowance is "
+                     "granted once per address, so a throwaway one only costs "
+                     "you the allowance you already had.")
 
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _signup_network(request.client.host if request.client else "unknown")
         if store.recent_signups(client_ip) >= MAX_SIGNUPS_PER_DAY:
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,

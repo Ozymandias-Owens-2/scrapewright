@@ -196,12 +196,17 @@ def test_crawl_returns_a_job_then_completes(client, stub_core):
 
 def test_crawl_is_capped_by_the_credits_on_hand(client):
     """A record costs one credit, so a caller cannot start a job bigger than
-    their balance -- the cap replaces an overdraft."""
-    c, *_ = client
+    their balance -- the cap replaces an overdraft. Topped up first, or the
+    free tier's own item cap would be the thing doing the limiting."""
+    c, store, key, _ = client
+    store.grant(key.id, 200, "top-up", idempotency_key="stripe:cs_test")
+    c.get("/v1/usage")                      # grants the monthly allowance
+    store.spend(key.id, store.balance(key.id) - 200, "used earlier")
+
     r = c.post("/v1/crawl", json={"url": "https://x/shop", "max_items": 100_000})
     body = r.json()
-    assert body["max_items"] == FREE_MONTHLY_CREDITS
-    assert body["credits_available"] == FREE_MONTHLY_CREDITS
+    assert body["credits_available"] == 200
+    assert body["max_items"] == 200
 
 
 def test_crawl_is_also_capped_by_the_tier(client):

@@ -153,7 +153,9 @@ scrapewright speaks [MCP](https://modelcontextprotocol.io), so an agent can call
 a tool instead of reading raw HTML itself. Two ways in.
 
 **Hosted, nothing to install.** Point the client at the service with a key from
-[scrapewright.app](https://scrapewright.app) (1,000 free rows a month):
+[scrapewright.app](https://scrapewright.app) (1,000 free rows a month; an
+account that has never been topped up compiles one new site and renders twenty
+pages a day):
 
 ```json
 {
