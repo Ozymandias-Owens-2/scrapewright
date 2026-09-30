@@ -291,14 +291,20 @@ def siblings_on(links: list[str], example_url: str, shape: UrlShape,
         agreement = sum(1 for a, b in zip(segments, example) if a == b)
         scored.append((agreement, url))
 
-    # Best agreement first, taking whole score bands until there are enough
-    # links to call it a template, then stopping. Stopping is the point: one
-    # sibling may share an extra segment by luck -- the same brand, the same
-    # year -- and cutting at the top score alone would keep only that one,
-    # while going all the way down would sweep in /about/team/jan/bio.
-    group: list[str] = []
-    for score in sorted({agreement for agreement, _ in scored}, reverse=True):
-        group.extend(url for agreement, url in scored if agreement == score)
+    # The template is the score most links agree on, not the highest score
+    # any link reaches. Taking bands from the top until there were "enough"
+    # stopped at the two other Audis on a dealer's stock page -- they share
+    # the brand segment, so they score higher -- and left the thirteen cars
+    # of other makes behind. The crowd is the template; a couple of links
+    # scoring above it are the same template plus a coincidence, so they are
+    # kept too, while everything below is something else.
+    by_score: dict[int, list[str]] = {}
+    for agreement, url in scored:
+        by_score.setdefault(agreement, []).append(url)
+    if by_score:
+        crowd = max(by_score, key=lambda score: (len(by_score[score]), score))
+        group = [url for score, urls in by_score.items() if score >= crowd
+                 for url in urls]
         if len(group) >= min_group:
             return group
 
@@ -361,7 +367,8 @@ def _from_listings(shape: UrlShape, example_url: str, example_html: str | None,
     candidates: list[str] = []
     if listing_url:
         candidates.append(listing_url)
-    for url in (_ancestor_listings(example_url)
+    for url in (_kin_listings(example_html, example_url)
+                + _ancestor_listings(example_url)
                 + _breadcrumb_links(example_html, example_url)):
         if url not in candidates:
             candidates.append(url)
@@ -387,6 +394,40 @@ def _from_listings(shape: UrlShape, example_url: str, example_html: str | None,
             page = frontier._next_page(BeautifulSoup(html, "html.parser"), page)
         if found:
             return          # that was the listing; no need to climb further
+
+
+def _kin_listings(html: str | None, example_url: str) -> list[str]:
+    """Links whose first path segment is a near-miss of the example's.
+
+    A camper lives at /camper/12630/ and the stock sits at /campers/ --
+    singular and plural, so no ancestor of the example ever reaches it, and
+    by-example found nothing on that site without being told where to look.
+    The menu names it; this notices that "campers" begins with "camper".
+
+    Shallow links only. /camper/12630/similar starts the same way and is
+    another car, not the list.
+    """
+    if not html:
+        return []
+    first = _item_path(example_url).strip("/").split("/")[0].lower()
+    if not first:
+        return []
+
+    host = urlsplit(example_url).netloc
+    out, seen = [], set()
+    for a in BeautifulSoup(html, "html.parser").find_all("a", href=True):
+        url = urljoin(example_url, a["href"].split("#")[0])
+        parts = urlsplit(url)
+        if parts.netloc != host or url in seen:
+            continue
+        segments = [s for s in parts.path.split("/") if s]
+        if len(segments) != 1:
+            continue
+        head = segments[0].lower()
+        if head != first and head.startswith(first):
+            seen.add(url)
+            out.append(url)
+    return out
 
 
 def _ancestor_listings(example: str) -> list[str]:
