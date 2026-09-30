@@ -10,6 +10,7 @@ from scrapewright.crawl import Frontier
 from scrapewright.extract.base import SelectorRecipe
 from scrapewright.fetch import looks_js_shelled, visible_text_length
 from scrapewright.pipeline import Scrapewright
+from scrapewright.schema import PRODUCT_SCHEMA
 from tests.test_pipeline import GENERIC_RECIPE, _FakeLLM
 
 
@@ -48,17 +49,38 @@ def test_visible_text_length_ignores_scripts(fixture):
 
 
 # ── escalation policy ────────────────────────────────────────────────────────
-def test_static_success_never_starts_the_browser(tmp_path, fixture):
+def test_a_compiled_site_is_replayed_without_the_browser(tmp_path, fixture):
+    """Once a site is compiled, a static page is served statically.
+
+    The first page is different, and deliberately so: with a browser
+    available the model is taught on the rendered page, because a recipe
+    learned from the static copy and then relearned from the rendered one
+    cost two compilations for one site -- 639 credits where 305 was the
+    honest price. One render is five.
+    """
+    cache = RecipeCache(tmp_path / "r.json")
+    cache.put(PAGE_URL, GENERIC_RECIPE.model_copy(deep=True), PRODUCT_SCHEMA.name)
     static = _CountingFetcher(fixture("generic_product.html"))
     browser = _CountingFetcher(fixture("generic_product.html"))
-    llm = _FakeLLM(GENERIC_RECIPE)
-    sw = Scrapewright(cache=RecipeCache(tmp_path / "r.json"), llm=llm,
+    sw = Scrapewright(cache=cache, llm=_FakeLLM(GENERIC_RECIPE),
                       fetcher=static, browser=browser)
 
     product = sw.scrape_page(PAGE_URL)
     assert product is not None and product.is_usable()
     assert static.calls == 1
     assert browser.calls == 0            # rendering is never paid for needlessly
+
+
+def test_the_first_page_of_a_site_is_taught_on_the_rendered_one(tmp_path, fixture):
+    static = _CountingFetcher(fixture("generic_product.html"))
+    browser = _CountingFetcher(fixture("generic_product.html"))
+    llm = _FakeLLM(GENERIC_RECIPE)
+    sw = Scrapewright(cache=RecipeCache(tmp_path / "r.json"), llm=llm,
+                      fetcher=static, browser=browser)
+
+    assert sw.scrape_page(PAGE_URL) is not None
+    assert browser.calls == 1
+    assert llm.calls == 1                # taught once, not once per body
 
 
 def test_js_shell_escalates_and_tags_the_recipe(tmp_path, fixture):

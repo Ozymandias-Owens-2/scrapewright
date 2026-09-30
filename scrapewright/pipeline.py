@@ -191,6 +191,18 @@ class Scrapewright:
 
         html = self.fetcher.fetch(url)
 
+        # Nothing learned about this site yet, and a browser is available:
+        # teach on the rendered page. Learning on the static copy first and
+        # then again on the rendered one bought two compilations for one site
+        # -- 639 credits where 305 was the honest price -- because the static
+        # copy is a worse likeness of what the visitor sees, and the model
+        # picked worse selectors from it.
+        if recipe is None and allow_llm and self._can_js() and html is not None:
+            taught = self._teach_on_rendered(url, schema, html)
+            if taught is not None:
+                return taught
+            recipe = self.cache.get(url, schema.name)
+
         # An empty client-side shell can't be extracted from and isn't worth an
         # LLM call — go straight to the browser when one is available.
         record = None
@@ -231,6 +243,33 @@ class Scrapewright:
         return max((r for r in (rendered_record, record) if r is not None),
                    key=lambda r: sum(1 for v in r.data.values() if v),
                    default=None)
+
+    def _teach_on_rendered(self, url: str, schema: Schema,
+                           static_html: str) -> Record | None:
+        """Compile this site from the rendered page, once, and see whether the
+        result also works without a browser.
+
+        The second half matters as much as the first: a recipe learned from a
+        rendered page is marked ``needs_js``, and that marking renders every
+        later page at five credits each. Both bodies are already in hand, so
+        checking costs nothing -- and on a site whose static HTML carries the
+        same values, it saves the render forever.
+        """
+        rendered = self._browser_fetch(url)
+        if rendered is None:
+            return None
+        record = self._extract_chain(rendered, url, schema, None, True, True)
+        if record is None or not schema.is_satisfied_by(record.data):
+            return None
+
+        recipe = self.cache.get(url, schema.name)
+        if recipe is not None and recipe.needs_js:
+            on_static = SelectorExtractor(recipe, schema).extract_record(
+                static_html, url)
+            if on_static is not None and schema.is_satisfied_by(on_static.data):
+                recipe.needs_js = False
+                self.cache.put(url, recipe, schema.name)
+        return record
 
     def _covers_enough(self, recipe, schema: Schema) -> bool:
         """Does this recipe know where most of the asked-for fields live?
