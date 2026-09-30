@@ -178,8 +178,10 @@ def _from_sitemaps(shape: UrlShape, origin: str, limit: int,
         queue.extend(n for n in nested if n not in seen_maps)
 
 
-def _links_on(url: str, shape: UrlShape, fetcher=None, session=None) -> list[str]:
-    html = fetcher.fetch(url) if fetcher is not None else _text_of(url, session)
+def _links_on(url: str, shape: UrlShape, fetcher=None, session=None,
+              html: str | None = None) -> list[str]:
+    if html is None:
+        html = fetcher.fetch(url) if fetcher is not None else _text_of(url, session)
     if not html:
         return []
     soup = BeautifulSoup(html, "html.parser")
@@ -199,8 +201,13 @@ def _parent_listing(example: str) -> str:
 
 
 def find_similar(example_url: str, *, limit: int = 100, fetcher=None,
-                 session=None) -> list[str]:
-    """URLs of pages shaped like ``example_url``, cheapest source first."""
+                 session=None, example_html: str | None = None) -> list[str]:
+    """URLs of pages shaped like ``example_url``, cheapest source first.
+
+    ``example_html`` is the example page if the caller already holds it.
+    Without it this fetches the page a second time, and the caller pays for
+    both.
+    """
     shape = url_template(example_url)
     parts = urlsplit(example_url)
     origin = f"{parts.scheme}://{parts.netloc}"
@@ -220,7 +227,7 @@ def find_similar(example_url: str, *, limit: int = 100, fetcher=None,
 
     if take(_from_sitemaps(shape, origin, limit, session)):
         return out
-    if take(_links_on(example_url, shape, fetcher, session)):
+    if take(_links_on(example_url, shape, fetcher, session, example_html)):
         return out
     take(_links_on(_parent_listing(example_url), shape, fetcher, session))
     return out

@@ -29,7 +29,7 @@ browser and the chain runs again; a recipe learned that way is tagged
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -43,7 +43,7 @@ from .extract.selectors import SelectorExtractor
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
 from .fetch import BrowserFetcher, StaticFetcher, looks_js_shelled
-from .like import find_similar
+from .like import find_similar, url_template
 from .models import Product, Record
 from .schema import PRODUCT_SCHEMA, Schema
 from .validate import Coverage, coverage
@@ -57,6 +57,46 @@ def _rows_cache_name(schema: Schema) -> str:
     artifacts -- one names a container, the other does not -- so they must not
     share a cache entry and overwrite each other."""
     return f"{schema.name}+rows"
+
+
+# How many pages "find every one of these" means when the caller named no
+# number. Generous, but not a whole-site crawl nobody asked to pay for.
+DEFAULT_LIKE_CAP = 200
+# Room to keep discovering past the cap, so the queue does not starve on a
+# page whose neighbours are mostly ones we have already seen.
+LIKE_FRONTIER_SLACK = 3
+
+
+class _RecordingFetcher:
+    """Passes fetches through and keeps the last body.
+
+    The by-example walk needs each page's links, and the extractor has just
+    fetched that page. Asking for it again would double the caller's bill for
+    nothing.
+    """
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.last_html: str | None = None
+
+    def fetch(self, url: str) -> str | None:
+        html = self.inner.fetch(url)
+        self.last_html = html
+        return html
+
+    def __getattr__(self, name):        # anything else belongs to the real one
+        return getattr(self.inner, name)
+
+
+def _matching_links(html: str, base_url: str, shape) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    out, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        candidate = urljoin(base_url, a["href"].split("#")[0])
+        if candidate not in seen and shape.matches(candidate):
+            seen.add(candidate)
+            out.append(candidate)
+    return out
 
 
 def _guess_next_page(url: str, page_number: int) -> str:
@@ -373,26 +413,52 @@ class Scrapewright:
         replay it for nothing.
         """
         self._synth_calls = 0
-        count = 0
+        shape = url_template(example_url)
+        cap = max_items if max_items is not None else DEFAULT_LIKE_CAP
 
-        if include_example:
-            record = self.extract(example_url, schema, allow_llm=allow_llm)
-            if record is not None and record.data:
-                yield record
-                count += 1
+        # Every page we extract has already been fetched; reading its links on
+        # the way past costs nothing and is what lets a site with no sitemap
+        # be walked at all -- item pages link to their neighbours ("related",
+        # "next"), so the set grows as it is consumed.
+        recorder = _RecordingFetcher(self.fetcher)
+        self.fetcher, original = recorder, self.fetcher
+        try:
+            seen: set[str] = {example_url}
+            count = 0
 
-        limit = (max_items - count) if max_items is not None else 500
-        if limit <= 0:
-            return
-        for url in find_similar(example_url, limit=limit, session=self.session,
-                                fetcher=self.fetcher):
-            if max_items is not None and count >= max_items:
-                return
-            can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
-            record = self.extract(url, schema, allow_llm=can_llm)
-            if record is not None and record.data:
-                yield record
-                count += 1
+            # The example is read first, and its HTML then serves discovery
+            # too -- fetching it once for the record and again to look at its
+            # links would bill the caller twice for one page.
+            recorder.last_html = None
+            if include_example:
+                record = self.extract(example_url, schema, allow_llm=allow_llm)
+                if record is not None and record.data:
+                    yield record
+                    count += 1
+            example_html = recorder.last_html
+
+            queue: list[str] = []
+            for url in find_similar(example_url, limit=cap, session=self.session,
+                                    fetcher=original, example_html=example_html):
+                if url not in seen:
+                    seen.add(url)
+                    queue.append(url)
+
+            while queue and count < cap:
+                url = queue.pop(0)
+                can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
+                recorder.last_html = None
+                record = self.extract(url, schema, allow_llm=can_llm)
+                if record is not None and record.data:
+                    yield record
+                    count += 1
+                if recorder.last_html and len(seen) < cap * LIKE_FRONTIER_SLACK:
+                    for neighbour in _matching_links(recorder.last_html, url, shape):
+                        if neighbour not in seen:
+                            seen.add(neighbour)
+                            queue.append(neighbour)
+        finally:
+            self.fetcher = original
 
     # ── internals ────────────────────────────────────────────────────────────
     def _can_js(self) -> bool:

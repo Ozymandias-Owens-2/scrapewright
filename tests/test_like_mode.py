@@ -141,3 +141,63 @@ def test_the_pipeline_compiles_once_and_replays_on_the_siblings(monkeypatch, tmp
     rows = list(sw.crawl_like(EXAMPLE, Schema.from_names(["title"]), max_items=10))
     assert len(rows) == 3                 # the example plus its two siblings
     assert _Llm.calls == 1
+
+
+def test_neighbours_are_harvested_from_pages_already_fetched(monkeypatch, tmp_path):
+    """A site with no sitemap is still walkable: item pages link to each
+    other, and those pages are fetched for extraction anyway."""
+    from scrapewright.cache import RecipeCache
+    from scrapewright.extract.base import SelectorRecipe
+    from scrapewright.pipeline import Scrapewright
+    from scrapewright.schema import Schema
+
+    monkeypatch.setattr("scrapewright.like._sitemap_urls",
+                        lambda origin, session=None: [])
+    monkeypatch.setattr("scrapewright.like._text_of", lambda url, session=None: None)
+
+    # A chain: each page names only the next one.
+    chain = {
+        "https://shop.test/products/a": "b",
+        "https://shop.test/products/b": "c",
+        "https://shop.test/products/c": "d",
+        "https://shop.test/products/d": None,
+    }
+
+    class _Fetcher:
+        def __init__(self): self.asked = []
+        def fetch(self, url):
+            self.asked.append(url)
+            if url not in chain:
+                return None
+            nxt = chain[url]
+            link = f'<a href="/products/{nxt}">next</a>' if nxt else ""
+            return f"<html><h1>{url[-1]}</h1>{link}</html>"
+
+    class _Llm:
+        def synthesize(self, html, url, schema=None, **kw):
+            return SelectorRecipe(fields={"title": "h1"})
+
+    fetcher = _Fetcher()
+    sw = Scrapewright(cache=RecipeCache(tmp_path / "r.json"), llm=_Llm(),
+                      fetcher=fetcher)
+    rows = list(sw.crawl_like("https://shop.test/products/a",
+                              Schema.from_names(["title"]), max_items=10))
+    assert [r.data["title"] for r in rows] == ["a", "b", "c", "d"]
+    # Each item page fetched exactly once -- for extraction, never again for
+    # its links, not even the example. (The parent directory is probed once as
+    # a discovery source, and answers nothing.)
+    for page in chain:
+        assert fetcher.asked.count(page) == 1, fetcher.asked
+
+
+def test_the_fetcher_is_put_back_afterwards(tmp_path):
+    from scrapewright.cache import RecipeCache
+    from scrapewright.pipeline import Scrapewright
+
+    class _Fetcher:
+        def fetch(self, url): return None
+
+    original = _Fetcher()
+    sw = Scrapewright(cache=RecipeCache(tmp_path / "r.json"), fetcher=original)
+    list(sw.crawl_like("https://shop.test/products/a", max_items=1))
+    assert sw.fetcher is original
