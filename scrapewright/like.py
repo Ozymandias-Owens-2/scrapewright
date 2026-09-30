@@ -42,6 +42,9 @@ from .robots import get_policy
 # caller's cap, and parsing the rest is time nobody asked for.
 MAX_SITEMAP_BYTES = 12_000_000
 MAX_SITEMAPS = 25
+# Breadcrumbs run home > section > category; the nearest few are the ones
+# that actually list pages like the example.
+MAX_LISTINGS = 3
 
 
 class UrlShape:
@@ -194,6 +197,50 @@ def _links_on(url: str, shape: UrlShape, fetcher=None, session=None,
     return out
 
 
+def _breadcrumb_links(html: str | None, base_url: str) -> list[str]:
+    """Where the example says it came from.
+
+    An item page nearly always points back at its category, in a breadcrumb.
+    That category is a listing, and a listing can be walked with pagination --
+    which is the difference between the four books a product page happens to
+    link to and the whole shelf.
+    """
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    out, seen = [], set()
+    for container in soup.select(
+            '[class*=breadcrumb], [id*=breadcrumb], nav[aria-label*=readcrumb]'):
+        for a in container.find_all("a", href=True):
+            url = urljoin(base_url, a["href"].split("#")[0])
+            if url not in seen and urlsplit(url).netloc == urlsplit(base_url).netloc:
+                seen.add(url)
+                out.append(url)
+    # Nearest first: the last crumb is the category, the first is the home page.
+    return list(reversed(out))
+
+
+def _from_listings(shape: UrlShape, example_url: str, example_html: str | None,
+                   limit: int, fetcher=None, session=None) -> Iterator[str]:
+    """Item URLs reached by walking the listings the example points back to."""
+    from .crawl import Frontier          # late: crawl imports from here
+
+    candidates = _breadcrumb_links(example_html, example_url)
+    parent = _parent_listing(example_url)
+    if parent not in candidates:
+        candidates.append(parent)
+
+    frontier = Frontier(fetcher=fetcher, session=session)
+    found = 0
+    for listing in candidates[:MAX_LISTINGS]:
+        for url in frontier.discover(listing):
+            if shape.matches(url):
+                found += 1
+                yield url
+                if found >= limit:
+                    return
+
+
 def _parent_listing(example: str) -> str:
     parts = urlsplit(example)
     parent = _item_path(example).rsplit("/", 1)[0] or "/"
@@ -227,7 +274,17 @@ def find_similar(example_url: str, *, limit: int = 100, fetcher=None,
 
     if take(_from_sitemaps(shape, origin, limit, session)):
         return out
+
+    # One read of the example serves both remaining sources: its own links,
+    # and the breadcrumb that says which category it belongs to.
+    if example_html is None:
+        example_html = (fetcher.fetch(example_url) if fetcher is not None
+                        else _text_of(example_url, session))
     if take(_links_on(example_url, shape, fetcher, session, example_html)):
         return out
-    take(_links_on(_parent_listing(example_url), shape, fetcher, session))
+    # Last and most thorough: walk the category the example came from. This
+    # one follows pagination, so it reaches past whatever the item page
+    # happened to link to -- on a demo shop, the same four books every time.
+    take(_from_listings(shape, example_url, example_html, limit - len(out),
+                        fetcher, session))
     return out

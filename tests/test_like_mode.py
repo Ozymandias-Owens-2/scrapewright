@@ -201,3 +201,46 @@ def test_the_fetcher_is_put_back_afterwards(tmp_path):
     sw = Scrapewright(cache=RecipeCache(tmp_path / "r.json"), fetcher=original)
     list(sw.crawl_like("https://shop.test/products/a", max_items=1))
     assert sw.fetcher is original
+
+
+BREADCRUMB_PAGE = """
+<html><body>
+  <ul class="breadcrumb">
+    <li><a href="/">Home</a></li>
+    <li><a href="/catalogue/category/mystery">Mystery</a></li>
+    <li class="active">Sharp Objects</li>
+  </ul>
+  <h1>Sharp Objects</h1>
+</body></html>"""
+
+
+def test_the_breadcrumb_names_the_category_nearest_first():
+    from scrapewright.like import _breadcrumb_links
+
+    found = _breadcrumb_links(BREADCRUMB_PAGE, "https://shop.test/products/blue-lamp")
+    assert found == ["https://shop.test/catalogue/category/mystery",
+                     "https://shop.test/"]
+
+
+def test_the_category_is_walked_when_the_item_page_links_nowhere(monkeypatch):
+    """A product page that links only to the same four neighbours is a dead
+    end; its category, with pagination, is not."""
+    monkeypatch.setattr("scrapewright.like._sitemap_urls",
+                        lambda origin, session=None: [])
+    monkeypatch.setattr("scrapewright.like._text_of", lambda url, session=None: None)
+
+    listing = ("<html><body>"
+               + "".join(f'<a href="/products/item-{i}"><img src="{i}.jpg"></a>'
+                         for i in range(3))
+               + "</body></html>")
+
+    class _Web:
+        def fetch(self, url):
+            if url == EXAMPLE:
+                return BREADCRUMB_PAGE
+            if url == "https://shop.test/catalogue/category/mystery":
+                return listing
+            return None
+
+    found = find_similar(EXAMPLE, limit=10, fetcher=_Web())
+    assert found == [f"https://shop.test/products/item-{i}" for i in range(3)]
