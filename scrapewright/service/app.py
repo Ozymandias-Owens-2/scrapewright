@@ -119,14 +119,18 @@ _UNSAFE_IN_FILENAME = re.compile(r'[<>:"/\|?*]+')
 
 
 def _job_label(url: str, mode: str) -> str:
-    """"autoscout24.nl - rows": which site, and which way we read it.
+    """"autoscout24.nl - rows - 2026-09-30": site, mode, day.
 
     Every export used to arrive as scrapewright.csv, so a folder of them
     became scrapewright (1), (2), (3) and told you nothing about which was
-    which.
+    which. The date is there because the same site read the same way on two
+    days is two different answers -- prices move -- and the browser would
+    otherwise file the newer one as "(1)".
     """
     host = (urlsplit(url).hostname or "site").removeprefix("www.")
-    return _UNSAFE_IN_FILENAME.sub("-", f"{host} - {mode}").strip(" .-") or "scrapewright"
+    stamp = time.strftime("%Y-%m-%d")
+    cleaned = _UNSAFE_IN_FILENAME.sub("-", f"{host} - {mode} - {stamp}")
+    return cleaned.strip(" .-") or "scrapewright"
 
 
 def _reject_unusable_url(url: str) -> None:
@@ -534,7 +538,7 @@ def create_app(store: Store | None = None,
         except ImportError as e:      # xlsx without openpyxl in the image
             raise HTTPException(503, f"{format} export is unavailable here: {e}") from e
 
-        name = job.label or f"scrapewright-{time.strftime('%Y-%m-%d')}"
+        name = job.label or f"scrapewright - {time.strftime('%Y-%m-%d')}"
         return FileResponse(path, filename=f"{name}{suffix}",
                             headers={"Cache-Control": "no-store"})
 

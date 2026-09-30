@@ -2,6 +2,8 @@
 import codecs
 import csv
 import io
+import time
+from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -77,8 +79,6 @@ def test_the_filename_says_which_site_and_which_mode(client_and_keys):
                    headers={"X-API-Key": mine})
     # Starlette percent-encodes a name with spaces into the RFC 5987 form;
     # the page reads that form, so what the browser saves is the plain name.
-    from urllib.parse import unquote
-
     assert unquote(r.headers["content-disposition"]).endswith(
         "autoscout24.nl - rows.xlsx")
 
@@ -89,14 +89,17 @@ def test_a_job_with_no_label_still_gets_a_name(client_and_keys):
     job = _finished_job(jobs, key_id)
 
     r = client.get(f"/v1/jobs/{job.id}/download", headers={"X-API-Key": mine})
-    assert "scrapewright-" in r.headers["content-disposition"]
+    assert "scrapewright" in unquote(r.headers["content-disposition"])
 
 
 def test_the_label_is_built_from_the_request():
+    """Site, mode, and the day: the same site read the same way on two days
+    is two different answers, and prices move."""
     from scrapewright.service.app import _job_label
 
+    today = time.strftime("%Y-%m-%d")
     assert _job_label("https://www.autoscout24.nl/lst/audi", "rows") == \
-        "autoscout24.nl - rows"
+        f"autoscout24.nl - rows - {today}"
     assert _job_label("https://books.toscrape.com/x", "like") == \
-        "books.toscrape.com - like"
+        f"books.toscrape.com - like - {today}"
     assert "/" not in _job_label("https://a.test/x", "rows")
