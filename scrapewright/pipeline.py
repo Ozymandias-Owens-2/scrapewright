@@ -49,6 +49,10 @@ from .models import Product, Record
 from .schema import PRODUCT_SCHEMA, Schema
 from .validate import Coverage, coverage
 
+# How much of a schema a recipe has to cover before it is taken at its word.
+# Below this the recipe is judged incomplete rather than the page empty, and
+# a browser is worth one look -- that is the difference between a car page
+# whose price is drawn by a script and a product page with no SKU.
 DEFAULT_ACCEPT_RATIO = 0.5
 DEFAULT_MAX_SYNTH_PER_RUN = 3
 
@@ -193,7 +197,21 @@ class Scrapewright:
         if html is not None and not (self._can_js() and looks_js_shelled(html)):
             record = self._extract_chain(html, url, schema, recipe, allow_llm, False)
             if record is not None and schema.is_satisfied_by(record.data):
-                return record
+                # Satisfied is not complete. A dealer's car page carries its
+                # title in a meta tag and draws the price with a script, so
+                # the static pass produced a one-field recipe for a
+                # three-field request, found the one required field, and
+                # returned -- while the caller had asked for a browser and
+                # was paying for renders that never happened.
+                #
+                # The test is the recipe, not the page. A recipe with no
+                # selector at all for a field that was asked for is
+                # incomplete, and worth one look at the rendered page. A
+                # recipe that has the selector and comes back empty is a page
+                # where the field is genuinely absent, and rendering every
+                # one of those would bill for nothing.
+                if not self._can_js() or self._recipe_covers(url, schema):
+                    return record
 
         if not self._can_js():
             return record
@@ -207,14 +225,46 @@ class Scrapewright:
         # and to whoever is being billed. Selectors learned from static HTML
         # very often still match once the page has rendered.
         recipe = self.cache.get(url, schema.name) or recipe
-        return self._extract_chain(rendered, url, schema, recipe, allow_llm, True) or record
+        rendered_record = self._extract_chain(rendered, url, schema, recipe,
+                                              allow_llm, True)
+        # Keep whichever answered more of the question.
+        return max((r for r in (rendered_record, record) if r is not None),
+                   key=lambda r: sum(1 for v in r.data.values() if v),
+                   default=None)
+
+    def _covers_enough(self, recipe, schema: Schema) -> bool:
+        """Does this recipe know where most of the asked-for fields live?
+
+        Which fields count depends on who chose them. A caller who listed
+        three fields asked for all three, so a recipe that knows where one of
+        them lives is incomplete. The built-in product schema offers six
+        knowing most pages carry three, so only its required fields say
+        anything -- demanding the rest would recompile every page, which is
+        the 606-credit double synthesis this once cost in production.
+        """
+        if recipe is None:
+            return False
+        expected = schema.expected_names
+        if not expected:
+            return True
+        known = {f for f, selector in recipe.fields.items() if selector}
+        known.update(recipe.alternates)
+        found = sum(1 for name in expected if name in known)
+        return found / len(expected) >= self.accept_ratio
+
+    def _recipe_covers(self, url: str, schema: Schema) -> bool:
+        return self._covers_enough(self.cache.get(url, schema.name), schema)
 
     def _extract_chain(self, html: str, url: str, schema: Schema, recipe,
                        allow_llm: bool, js_used: bool) -> Record | None:
         """cached recipe → JSON-LD → LLM synthesis, against one HTML document."""
         if recipe is not None:
             record = SelectorExtractor(recipe, schema).extract_record(html, url)
-            if record is not None and schema.is_satisfied_by(record.data):
+            # A thin recipe must not be accepted just because the one required
+            # field is in it: that is how a car page kept returning its title
+            # and nothing else even after the browser had rendered the price.
+            thin = allow_llm and not self._covers_enough(recipe, schema)
+            if record is not None and not thin and schema.is_satisfied_by(record.data):
                 if js_used and not recipe.needs_js:
                     # The recipe only works on rendered HTML — remember that.
                     recipe.needs_js = True

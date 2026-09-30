@@ -46,6 +46,12 @@ class Schema:
     name: str
     fields: tuple[Field, ...]
     required: tuple[str, ...] = ()
+    # True when the caller listed the fields themselves. Then every one of
+    # them was asked for on purpose, and a recipe that knows where only one
+    # of three lives is an incomplete recipe. The built-in product schema is
+    # the opposite: it offers six fields knowing most pages carry three, so
+    # only the required ones are evidence of anything.
+    named_by_caller: bool = False
 
     @classmethod
     def from_names(cls, names, name: str = "custom", required=None) -> Schema:
@@ -70,11 +76,17 @@ class Schema:
         if name == "custom":
             spec = "|".join(f"{f.name}:{f.kind}" for f in fields)
             name = "custom-" + hashlib.sha256(spec.encode()).hexdigest()[:10]
-        return cls(name=name, fields=tuple(fields), required=req)
+        return cls(name=name, fields=tuple(fields), required=req,
+                   named_by_caller=True)
 
     @property
     def field_names(self) -> tuple[str, ...]:
         return tuple(f.name for f in self.fields)
+
+    @property
+    def expected_names(self) -> tuple[str, ...]:
+        """Fields a recipe ought to know about, to be called complete."""
+        return self.field_names if self.named_by_caller else self.required
 
     @property
     def list_fields(self) -> frozenset[str]:
