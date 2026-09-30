@@ -124,6 +124,12 @@ class CrawlRequest(ExtractRequest):
                     "listing into item pages. 'rows': the listing's own cards "
                     "are the rows, walking its pagination. 'like': the URL is "
                     "one item page; find every other page shaped like it.")
+    listing_url: str | None = Field(
+        default=None,
+        description="For mode='like': the stock, catalogue or results page "
+                    "these items are listed on, e.g. https://dealer.nl/occasions. "
+                    "Guessing it is the part that fails, so say it when you "
+                    "know it; the walk starts there and follows its pagination.")
     rows: bool = Field(
         default=False, json_schema_extra={"deprecated": True},
         # Marked deprecated in the schema rather than with pydantic's
@@ -523,8 +529,9 @@ def create_app(store: Store | None = None,
             # only the one under test dies on the other two.
             walk = getattr(sw, {"rows": "crawl_rows", "like": "crawl_like",
                                 "links": "crawl_records"}[mode])
+            extra = {"listing_url": req.listing_url} if mode == "like" else {}
             try:
-                records = list(walk(req.url, schema, max_items=max_items))
+                records = list(walk(req.url, schema, max_items=max_items, **extra))
             finally:
                 sw.close()
             # Only a job that finished is billed. A crawl that died partway may

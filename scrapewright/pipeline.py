@@ -43,7 +43,7 @@ from .extract.selectors import SelectorExtractor
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
 from .fetch import BrowserFetcher, StaticFetcher, looks_js_shelled
-from .like import find_similar, url_template
+from .like import canonical, find_similar, url_template
 from .mend import Mender
 from .models import Product, Record
 from .schema import PRODUCT_SCHEMA, Schema
@@ -405,8 +405,14 @@ class Scrapewright:
     # ── By example: one card in, all its siblings out ────────────────────────
     def crawl_like(self, example_url: str, schema: Schema = PRODUCT_SCHEMA, *,
                    max_items: int | None = None, allow_llm: bool = True,
-                   include_example: bool = True) -> Iterator[Record]:
+                   include_example: bool = True,
+                   listing_url: str | None = None) -> Iterator[Record]:
         """Every page shaped like this one.
+
+        ``listing_url`` names the stock or results page when the caller knows
+        it. Worth saying: inferring it is the part that fails, and on a set
+        of real dealer sites it was the difference between nothing and a
+        hundred cars.
 
         The example does double duty: it says which pages the caller wants,
         and it is the page the recipe is compiled from -- an item page, which
@@ -424,7 +430,7 @@ class Scrapewright:
         recorder = _RecordingFetcher(self.fetcher)
         self.fetcher, original = recorder, self.fetcher
         try:
-            seen: set[str] = {example_url}
+            seen: set[str] = {canonical(example_url, shape)}
             count = 0
 
             # The example is read first, and its HTML then serves discovery
@@ -446,8 +452,14 @@ class Scrapewright:
             example_html = recorder.last_html
 
             queue: list[str] = []
-            for url in find_similar(example_url, limit=cap, session=self.session,
-                                    fetcher=original, example_html=example_html):
+            for url in find_similar(
+                    example_url, limit=cap, session=self.session,
+                    fetcher=original, example_html=example_html,
+                    listing_url=listing_url,
+                    # A stock list that renders client-side has no links in
+                    # its static HTML; without this the walk sees an empty
+                    # page and climbs past the listing it was looking for.
+                    js_fetcher=self._get_browser() if self._can_js() else None):
                 if url not in seen:
                     seen.add(url)
                     queue.append(url)
@@ -473,8 +485,10 @@ class Scrapewright:
                         count += 1
                 if page_html and len(seen) < cap * LIKE_FRONTIER_SLACK:
                     for neighbour in _matching_links(page_html, url, shape):
-                        if neighbour not in seen:
-                            seen.add(neighbour)
+                        # By canonical name: ?share=x is the page we just read.
+                        mark = canonical(neighbour, shape)
+                        if mark not in seen:
+                            seen.add(mark)
                             queue.append(neighbour)
 
             if mender is not None:

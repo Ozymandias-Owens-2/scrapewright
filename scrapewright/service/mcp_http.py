@@ -73,15 +73,27 @@ def mount_hosted_mcp(app: FastAPI, *, require_key: Callable[[str], Any],
 
     @server.tool()
     def crawl_site(listing_url: str, ctx: Context, fields: list[str] | None = None,
-                   max_items: int = 25, js: bool = False,
-                   scroll: int = 0) -> dict[str, Any]:
-        """Walk a site from one listing URL and extract every item. Waits up
-        to four minutes; a longer crawl returns a job_id to pass to
-        crawl_status."""
+                   max_items: int = 25, js: bool = False, scroll: int = 0,
+                   mode: str = "rows", like_page: str | None = None) -> dict[str, Any]:
+        """Walk a site and extract every item. Waits up to four minutes; a
+        longer crawl returns a job_id to pass to crawl_status.
+
+        `mode` picks how the items are found. "rows" (the default) reads every
+        card on the listing itself and follows its pagination -- right for
+        search results, categories and tables. "links" follows each card into
+        its own page, for sites where an item has one. "like" starts from one
+        example item page, given as `like_page`, and finds every other page
+        shaped like it; pass `listing_url` as well when you know the stock or
+        results page, because inferring it is the part that fails.
+        """
         def run() -> dict[str, Any]:
             key = key_for(ctx)
-            started = crawl(CrawlRequest(url=listing_url, fields=fields, js=js,
-                                         max_items=max_items, scroll=scroll), key)
+            start = like_page if (mode == "like" and like_page) else listing_url
+            started = crawl(CrawlRequest(url=start, fields=fields, js=js,
+                                         max_items=max_items, scroll=scroll,
+                                         mode=mode,
+                                         listing_url=(listing_url if mode == "like"
+                                                      and like_page else None)), key)
             deadline = time.monotonic() + CRAWL_WAIT_SECONDS
             while time.monotonic() < deadline:
                 state = job(started["job_id"], key)

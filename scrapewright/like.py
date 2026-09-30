@@ -29,7 +29,7 @@ import gzip
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -44,7 +44,14 @@ MAX_SITEMAP_BYTES = 12_000_000
 MAX_SITEMAPS = 25
 # Breadcrumbs run home > section > category; the nearest few are the ones
 # that actually list pages like the example.
-MAX_LISTINGS = 3
+MAX_LISTINGS = 8
+# A breadcrumb trail is home > section > category, not a site map. More links
+# than this and the container is something else wearing the name.
+MAX_CRUMBS = 8
+# Three links of one shape prove a template; one proves nothing.
+MIN_TEMPLATE_GROUP = 3
+# How deep to follow a listing's pagination while hunting for items.
+MAX_LISTING_PAGES = 5
 
 
 class UrlShape:
@@ -102,6 +109,31 @@ class UrlShape:
 def url_template(example: str) -> UrlShape:
     """The shape an example URL stands for."""
     return UrlShape(example)
+
+
+def canonical(url: str, shape: UrlShape | None = None,
+              html: str | None = None) -> str:
+    """One name per page, so the same car is not fetched twice.
+
+    A share widget appends ?share=x and a tracker appends ?utm_source=y; both
+    are the page the caller already has. On one dealer site two of fifty-two
+    links were duplicates of that kind. A page that declares a canonical URL
+    is believed; otherwise every query parameter the example did not itself
+    use is dropped, since those are the ones that cannot be identifying.
+    """
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        tag = soup.find("link", rel=lambda v: v and "canonical" in (
+            v if isinstance(v, list) else [v]))
+        href = (tag.get("href") or "").strip() if tag else ""
+        if href:
+            return urljoin(url, href.split("#")[0])
+
+    parts = urlsplit(url)
+    keep = shape.query_keys if shape is not None else frozenset()
+    query = urlencode([(k, v) for k, v in parse_qsl(parts.query) if k in keep])
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") or "/",
+                       query, ""))
 
 
 # ── sources ──────────────────────────────────────────────────────────────────
@@ -211,7 +243,14 @@ def _breadcrumb_links(html: str | None, base_url: str) -> list[str]:
     out, seen = [], set()
     for container in soup.select(
             '[class*=breadcrumb], [id*=breadcrumb], nav[aria-label*=readcrumb]'):
-        for a in container.find_all("a", href=True):
+        anchors = container.find_all("a", href=True)
+        # A trail is short: home, section, category. One dealer's footer sat
+        # in a wrapper whose class contained "breadcrumb", and its nineteen
+        # links -- privacy policy, disclaimer, copyright -- filled every slot
+        # the real stock page needed.
+        if not anchors or len(anchors) > MAX_CRUMBS:
+            continue
+        for a in anchors:
             url = urljoin(base_url, a["href"].split("#")[0])
             if url not in seen and urlsplit(url).netloc == urlsplit(base_url).netloc:
                 seen.add(url)
@@ -220,40 +259,169 @@ def _breadcrumb_links(html: str | None, base_url: str) -> list[str]:
     return list(reversed(out))
 
 
+def siblings_on(links: list[str], example_url: str, shape: UrlShape,
+                min_group: int = MIN_TEMPLATE_GROUP) -> list[str]:
+    """Which of a listing's links are items like the example.
+
+    The strict shape -- every segment equal but the last -- is right for
+    /products/<slug> and wrong for most real catalogues. A dealer writes
+    /occasions/voertuig/<id>/<slug>, where two segments differ between any
+    two cars; another writes /<brand>/<model>/<trim-id>/<year>/1/1/
+    details.aspx, where five do. Against those the strict rule matched
+    nothing, which is how by-example found zero pages on five sites out of
+    seven while their stock lists sat there full of cars.
+
+    With a listing in hand the listing decides. Among its links of the same
+    depth as the example, each is scored by how many path segments it shares
+    with the example in the same position: the cars share the route and
+    differ on the identifier, while /about/team/jan/bio shares only the
+    leading empty segment. The best score wins, and it has to be reached by
+    a group -- three links of a shape prove a template, one proves nothing.
+    """
+    host = urlsplit(example_url).netloc
+    example = _item_path(example_url).split("/")
+
+    scored: list[tuple[int, str]] = []
+    for url in links:
+        if urlsplit(url).netloc != host:
+            continue
+        segments = _item_path(url).split("/")
+        if len(segments) != len(example):
+            continue
+        agreement = sum(1 for a, b in zip(segments, example) if a == b)
+        scored.append((agreement, url))
+
+    # Best agreement first, taking whole score bands until there are enough
+    # links to call it a template, then stopping. Stopping is the point: one
+    # sibling may share an extra segment by luck -- the same brand, the same
+    # year -- and cutting at the top score alone would keep only that one,
+    # while going all the way down would sweep in /about/team/jan/bio.
+    group: list[str] = []
+    for score in sorted({agreement for agreement, _ in scored}, reverse=True):
+        group.extend(url for agreement, url in scored if agreement == score)
+        if len(group) >= min_group:
+            return group
+
+    return [url for url in links if shape.matches(url)]
+
+
+def _all_links_on(url: str, html: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    out, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        candidate = urljoin(url, a["href"].split("#")[0])
+        if candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
+def _fetch_listing(url: str, example_url: str, shape: UrlShape,
+                   fetcher=None, session=None, js_fetcher=None,
+                   min_group: int = MIN_TEMPLATE_GROUP) -> tuple[str | None, list[str]]:
+    """The listing page and the item links on it, rendering if it has to.
+
+    A stock list drawn by a script has no links in its static HTML at all,
+    so the static read is not evidence of absence -- retry in a browser
+    before deciding this page is not the listing.
+    """
+    html = fetcher.fetch(url) if fetcher is not None else _text_of(url, session)
+    items = (siblings_on(_all_links_on(url, html), example_url, shape, min_group)
+             if html else [])
+    if not items and js_fetcher is not None:
+        rendered = js_fetcher.fetch(url)
+        if rendered:
+            html = rendered
+            items = siblings_on(_all_links_on(url, html), example_url, shape,
+                                min_group)
+    return html, items
+
+
 def _from_listings(shape: UrlShape, example_url: str, example_html: str | None,
-                   limit: int, fetcher=None, session=None) -> Iterator[str]:
-    """Item URLs reached by walking the listings the example points back to."""
+                   limit: int, fetcher=None, session=None, js_fetcher=None,
+                   listing_url: str | None = None) -> Iterator[str]:
+    """Item URLs from a listing, following its pagination.
+
+    Which listing, in order of how much we trust it: the one the caller
+    named, then the breadcrumb on the example page, then each directory
+    above the example. A level with no item links is not the listing, so the
+    walk climbs rather than giving up -- most dealers keep their stock
+    several levels above the car.
+
+    The listing's own links decide what an item looks like here; see
+    :func:`siblings_on`. Frontier is used only for its pagination, because
+    its link-picking heuristics are tuned for shops and miss a car whose id
+    sits in a directory of its own.
+    """
     from .crawl import Frontier          # late: crawl imports from here
 
-    candidates = _breadcrumb_links(example_html, example_url)
-    parent = _parent_listing(example_url)
-    if parent not in candidates:
-        candidates.append(parent)
+    # Named first, then the directories above the example -- those are
+    # derived from the URL and cannot be anything else -- and only then the
+    # breadcrumb, which is a reading of the page and can be wrong.
+    candidates: list[str] = []
+    if listing_url:
+        candidates.append(listing_url)
+    for url in (_ancestor_listings(example_url)
+                + _breadcrumb_links(example_html, example_url)):
+        if url not in candidates:
+            candidates.append(url)
 
-    frontier = Frontier(fetcher=fetcher, session=session)
+    frontier = Frontier(fetcher=fetcher, session=session, js_fetcher=js_fetcher)
     found = 0
     for listing in candidates[:MAX_LISTINGS]:
-        for url in frontier.discover(listing):
-            if shape.matches(url):
+        page, pages_walked = listing, 0
+        while page and pages_walked < MAX_LISTING_PAGES:
+            pages_walked += 1
+            # A listing the caller named is vouched for, so two cars on it
+            # are enough; a guessed one has to prove itself with a group.
+            html, items = _fetch_listing(
+                page, example_url, shape, fetcher, session, js_fetcher,
+                min_group=2 if listing == listing_url else MIN_TEMPLATE_GROUP)
+            if not items:
+                break
+            for url in items:
                 found += 1
                 yield url
                 if found >= limit:
                     return
+            page = frontier._next_page(BeautifulSoup(html, "html.parser"), page)
+        if found:
+            return          # that was the listing; no need to climb further
 
 
-def _parent_listing(example: str) -> str:
+def _ancestor_listings(example: str) -> list[str]:
+    """Every directory above the example, nearest first.
+
+    Trying only the immediate parent found nothing on most real dealer
+    sites: a car at /occasions/voertuig/56896140/volkswagen-taigo has its
+    stock list at /occasions, three levels up, while
+    /occasions/voertuig/56896140 is a directory that does not exist.
+    Climbing costs one request per level and stops at the level that
+    answers.
+
+    Written without a trailing slash: servers that care redirect between the
+    two forms and the fetcher follows redirects, but a framework that 404s
+    on one of them is more often the slashed one.
+    """
     parts = urlsplit(example)
-    parent = _item_path(example).rsplit("/", 1)[0] or "/"
-    return f"{parts.scheme}://{parts.netloc}{parent}"
+    origin = f"{parts.scheme}://{parts.netloc}"
+    segments = _item_path(example).strip("/").split("/")
+    out = [f"{origin}/" + "/".join(segments[:depth])
+           for depth in range(len(segments) - 1, 0, -1)]
+    out.append(f"{origin}/")
+    return out
 
 
 def find_similar(example_url: str, *, limit: int = 100, fetcher=None,
-                 session=None, example_html: str | None = None) -> list[str]:
+                 session=None, example_html: str | None = None,
+                 js_fetcher=None, listing_url: str | None = None) -> list[str]:
     """URLs of pages shaped like ``example_url``, cheapest source first.
 
     ``example_html`` is the example page if the caller already holds it.
     Without it this fetches the page a second time, and the caller pays for
-    both.
+    both. ``listing_url`` is the stock or results page, when the caller knows
+    it -- worth saying, because guessing it is the part that fails. With
+    ``js_fetcher`` a listing that renders client-side is retried in a browser.
     """
     shape = url_template(example_url)
     parts = urlsplit(example_url)
@@ -264,13 +432,31 @@ def find_similar(example_url: str, *, limit: int = 100, fetcher=None,
 
     def take(urls: Iterable[str]) -> bool:
         for url in urls:
-            if url in seen or not shape.matches(url):
+            # No shape test here: every source has already decided what
+            # counts as a sibling, and a listing's own verdict is looser than
+            # the strict shape on purpose. Re-testing it here quietly threw
+            # away everything the listing had found.
+            #
+            # Two links to one page -- ?share=x, ?utm_source=y -- are one
+            # page, and fetching it twice bills the caller twice.
+            key = canonical(url, shape)
+            if key in seen:
                 continue
-            seen.add(url)
+            seen.add(key)
             out.append(url)
             if len(out) >= limit:
                 return True
         return False
+
+    seen.add(canonical(example_url, shape))
+
+    # A named listing is better than anything we could infer, so it goes
+    # first -- ahead even of the sitemap, which on a big site is mostly pages
+    # the caller did not ask about.
+    if listing_url and take(_from_listings(shape, example_url, example_html,
+                                           limit, fetcher, session, js_fetcher,
+                                           listing_url)):
+        return out
 
     if take(_from_sitemaps(shape, origin, limit, session)):
         return out
@@ -286,5 +472,5 @@ def find_similar(example_url: str, *, limit: int = 100, fetcher=None,
     # one follows pagination, so it reaches past whatever the item page
     # happened to link to -- on a demo shop, the same four books every time.
     take(_from_listings(shape, example_url, example_html, limit - len(out),
-                        fetcher, session))
+                        fetcher, session, js_fetcher))
     return out

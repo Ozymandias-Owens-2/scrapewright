@@ -96,8 +96,10 @@ def cmd_crawl(args) -> int:
         mode = "rows" if getattr(args, "rows", False) else args.mode
         walk = getattr(sw, {"rows": "crawl_rows", "like": "crawl_like",
                             "links": "crawl_records"}[mode])
+        extra = ({"listing_url": args.listing_url}
+                 if mode == "like" and getattr(args, "listing_url", None) else {})
         items = list(walk(args.url, schema, max_items=args.max,
-                          allow_llm=not args.no_llm))
+                          allow_llm=not args.no_llm, **extra))
     _deliver(items, args.out, f"crawl:{schema.name}")
     if not items:
         print("nothing found — try --js if the site renders client-side",
@@ -339,6 +341,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "sites whose cards carry no link. like: the URL is one "
                         "item page; find every other page shaped like it")
     c.add_argument("--rows", action="store_true", help=argparse.SUPPRESS)
+    c.add_argument("--from", dest="listing_url", metavar="URL",
+                   help="With --mode like: the stock or results page the items "
+                        "are listed on. Inferring it is the part that fails, so "
+                        "say it when you know it")
     _add_common(c, listing=True)
     c.set_defaults(func=cmd_crawl)
 
