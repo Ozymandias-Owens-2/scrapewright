@@ -345,6 +345,15 @@ nothing else to leak.</p>
     }
   });
 
+  function filenameFrom(header) {
+    if (!header) return null;
+    // RFC 5987 form first (filename*=UTF-8''...), then the plain one.
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
+    if (encoded) { try { return decodeURIComponent(encoded[1]); } catch (e) {} }
+    const plain = /filename="?([^";]+)"?/i.exec(header);
+    return plain ? plain[1] : null;
+  }
+
   document.querySelectorAll('.dl').forEach(function (b) {
     b.addEventListener('click', async function () {
       if (!jobId) return;
@@ -363,7 +372,12 @@ nothing else to leak.</p>
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'scrapewright.' + b.dataset.format;
+        // The server names the file after the site and the mode. A blob
+        // download ignores Content-Disposition, so read it and use it — this
+        // line used to hard-code "scrapewright", which is how a folder ended
+        // up holding scrapewright (1), (2), (3) and no way to tell them apart.
+        a.download = filenameFrom(r.headers.get('Content-Disposition'))
+                     || ('scrapewright.' + b.dataset.format);
         document.body.appendChild(a);
         a.click();
         a.remove();

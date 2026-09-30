@@ -28,6 +28,10 @@ class Job:
     id: str
     key_id: str
     kind: str
+    # What the caller asked for, in a few words -- "autoscout24.nl - rows".
+    # It names the downloaded file, so a folder of exports says which site
+    # and which mode each one came from instead of scrapewright (3).csv.
+    label: str = ""
     status: str = "queued"          # queued | running | done | error
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -39,6 +43,7 @@ class Job:
         payload = {
             "job_id": self.id,
             "kind": self.kind,
+            "label": self.label,
             "status": self.status,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
@@ -59,9 +64,10 @@ class JobRegistry:
         self._lock = threading.Lock()
 
     def submit(self, key_id: str, kind: str,
-               work: Callable[[], tuple[Any, dict[str, int]]]) -> Job:
+               work: Callable[[], tuple[Any, dict[str, int]]],
+               label: str = "") -> Job:
         """``work`` returns ``(result, usage)`` and runs off the request thread."""
-        job = Job(id=uuid.uuid4().hex[:16], key_id=key_id, kind=kind)
+        job = Job(id=uuid.uuid4().hex[:16], key_id=key_id, kind=kind, label=label)
         with self._lock:
             self._prune_locked()
             self._jobs[job.id] = job

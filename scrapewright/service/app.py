@@ -23,6 +23,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
@@ -110,6 +111,22 @@ class SignupRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     pack: str = Field(description="starter | growth | scale")
+
+
+# Windows and macOS both refuse these in a filename, and a stray one turns a
+# helpful name into a failed save.
+_UNSAFE_IN_FILENAME = re.compile(r'[<>:"/\|?*]+')
+
+
+def _job_label(url: str, mode: str) -> str:
+    """"autoscout24.nl - rows": which site, and which way we read it.
+
+    Every export used to arrive as scrapewright.csv, so a folder of them
+    became scrapewright (1), (2), (3) and told you nothing about which was
+    which.
+    """
+    host = (urlsplit(url).hostname or "site").removeprefix("www.")
+    return _UNSAFE_IN_FILENAME.sub("-", f"{host} - {mode}").strip(" .-") or "scrapewright"
 
 
 def _reject_unusable_url(url: str) -> None:
@@ -465,7 +482,8 @@ def create_app(store: Store | None = None,
             return ({"count": len(records),
                      "records": [_record_payload(r) for r in records]}, usage)
 
-        job = jobs.submit(key.id, "crawl", work)
+        job = jobs.submit(key.id, "crawl", work,
+                          label=_job_label(req.url, mode))
         return {**job.as_dict(), "max_items": max_items,
                 "credits_available": balance, "poll": f"/v1/jobs/{job.id}"}
 
@@ -516,8 +534,8 @@ def create_app(store: Store | None = None,
         except ImportError as e:      # xlsx without openpyxl in the image
             raise HTTPException(503, f"{format} export is unavailable here: {e}") from e
 
-        stamp = time.strftime("%Y-%m-%d")
-        return FileResponse(path, filename=f"scrapewright-{stamp}{suffix}",
+        name = job.label or f"scrapewright-{time.strftime('%Y-%m-%d')}"
+        return FileResponse(path, filename=f"{name}{suffix}",
                             headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/jobs")
