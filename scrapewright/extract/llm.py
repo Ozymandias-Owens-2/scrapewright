@@ -53,6 +53,10 @@ Rules:
   value sits far below the title, in a buy box, sticky bar, or configurator
   near the end of the markup.
 - Use null for any field the page does not expose.
+- A field asked for as a number must point at an element whose text holds
+  digits. A meta description is tidy, sits at the top of the page, and reads
+  well -- and it is not a price. Prefer the element a visitor would read the
+  value from.
 
 HTML:
 ```
@@ -88,6 +92,10 @@ Rules:
 - For a value that lives in an attribute — a link's href, an image's src, a
   meta tag's content — set that field's mode to "attr:<name>".
 - Use null for any field the item does not show.
+- A field asked for as a number must point at an element whose text holds
+  digits. A meta description is tidy, sits at the top of the page, and reads
+  well -- and it is not a price. Prefer the element a visitor would read the
+  value from.
 
 HTML:
 ```

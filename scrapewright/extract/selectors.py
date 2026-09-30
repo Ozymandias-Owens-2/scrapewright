@@ -11,6 +11,7 @@ the same code serves the built-in product schema and any caller-defined one.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urljoin
 
@@ -39,6 +40,45 @@ def _natural_attr(element) -> str:
     if name == "a" and element.get("href"):
         return "href"
     return "text"
+
+
+def prune_unusable(recipe, schema: Schema, html: str, url: str):
+    """Drop selectors that contradict the field they claim to fill.
+
+    A model handed a heavy page reaches for the tidy block at the top of it.
+    Asked for a car's price it answered ``meta[name='description']``, whose
+    content is "Occasion Volkswagen Taigo 1.0 TSI ..." -- confident, well
+    formed, and not a price. Cached, it then produced that string for every
+    car on the site.
+
+    The page itself settles it: a field declared ``number`` whose selector
+    finds an element with no digits in it is the wrong selector. Removing it
+    leaves the field empty, which is honest, and leaves the recipe
+    incomplete, which is what makes the pipeline look again rather than
+    replay a lie.
+
+    A selector that matches *nothing* is left alone. That is not evidence of
+    a bad guess -- the page may not have rendered -- and discarding it cost
+    a second synthesis on the very page that had just been paid for.
+    """
+    # On a copy: the caller's recipe is theirs. Mutating it in place quietly
+    # poisoned a shared fixture across tests, and would do the same to anyone
+    # holding a recipe they meant to reuse.
+    recipe = recipe.model_copy(deep=True)
+    values = SelectorExtractor(recipe, schema).extract_values(html, url)
+    for field in schema.fields:
+        if field.kind != "number" or field.name not in recipe.fields:
+            continue
+        value = values.get(field.name)
+        # Matching nothing is not being wrong: the page may simply not have
+        # rendered yet, and throwing the selector away there destroyed a good
+        # one and bought a second synthesis for the same page.
+        if value is None or isinstance(value, (int, float, Decimal)):
+            continue
+        if not any(ch.isdigit() for ch in str(value)):
+            recipe.fields.pop(field.name, None)
+            recipe.modes.pop(field.name, None)
+    return recipe
 
 
 class SelectorExtractor(Extractor):

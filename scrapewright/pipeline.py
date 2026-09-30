@@ -39,7 +39,7 @@ from .crawl import Frontier
 from .detect import detect
 from .extract.jsonld import JsonLdExtractor
 from .extract.llm import LlmExtractor
-from .extract.selectors import SelectorExtractor
+from .extract.selectors import SelectorExtractor, prune_unusable
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
 from .fetch import BrowserFetcher, StaticFetcher, looks_js_shelled
@@ -288,6 +288,9 @@ class Scrapewright:
         new_recipe = self._synthesize(html, url, schema)
         if new_recipe is None:
             return jsonld
+        # Check the model's homework against the page it was given, before
+        # this goes in the cache and is replayed on every other page.
+        new_recipe = prune_unusable(new_recipe, schema, html, url)
         new_recipe.needs_js = js_used
         self.cache.put(url, new_recipe, schema.name)
         fresh = SelectorExtractor(new_recipe, schema).extract_record(html, url)
