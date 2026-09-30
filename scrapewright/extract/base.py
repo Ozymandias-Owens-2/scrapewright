@@ -40,6 +40,12 @@ class SelectorRecipe(BaseModel):
 
     fields: dict[str, str] = Field(default_factory=dict)
     modes: dict[str, str] = Field(default_factory=dict)
+    # Where else the same field turns up. A site can show one thing in two
+    # layouts -- a job board puts the salary in a pay-transparency banner on
+    # some postings and in a sidebar list on others -- and a recipe compiled
+    # from one page cannot see the other. Tried in order after `fields`, so
+    # the selector learned from the example still wins.
+    alternates: dict[str, list[str]] = Field(default_factory=dict)
     # A listing page holds one card per item. With `item` set, that selector
     # matches the cards and every field selector is read *inside* a card, so a
     # page of twenty cars yields twenty records instead of one. Empty keeps the
@@ -72,6 +78,20 @@ class SelectorRecipe(BaseModel):
 
     def selector_for(self, field: str) -> str | None:
         return self.fields.get(field)
+
+    def selectors_for(self, field: str) -> list[str]:
+        """Every place to look for this field, best first."""
+        primary = self.fields.get(field)
+        out = [primary] if primary else []
+        out.extend(s for s in self.alternates.get(field, ()) if s and s not in out)
+        return out
+
+    def add_alternate(self, field: str, selector: str) -> bool:
+        """Remember another place this field lives. False if already known."""
+        if not selector or selector in self.selectors_for(field):
+            return False
+        self.alternates.setdefault(field, []).append(selector)
+        return True
 
     def __getattr__(self, name: str) -> Any:
         # Legacy attribute access: recipe.title, recipe.price, ...

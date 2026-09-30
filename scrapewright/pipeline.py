@@ -44,6 +44,7 @@ from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
 from .fetch import BrowserFetcher, StaticFetcher, looks_js_shelled
 from .like import find_similar, url_template
+from .mend import Mender
 from .models import Product, Record
 from .schema import PRODUCT_SCHEMA, Schema
 from .validate import Coverage, coverage
@@ -429,12 +430,19 @@ class Scrapewright:
             # The example is read first, and its HTML then serves discovery
             # too -- fetching it once for the record and again to look at its
             # links would bill the caller twice for one page.
+            mender = self._mender(example_url, schema, allow_llm)
             recorder.last_html = None
             if include_example:
                 record = self.extract(example_url, schema, allow_llm=allow_llm)
                 if record is not None and record.data:
-                    yield record
-                    count += 1
+                    # Through the mender like every other record: it is the
+                    # page that shows which fields this site fills at all, and
+                    # routing it around meant nothing was ever "missing".
+                    ready = (mender.offer(record, recorder.last_html, example_url)
+                             if mender else record)
+                    if ready is not None:
+                        yield ready
+                        count += 1
             example_html = recorder.last_html
 
             queue: list[str] = []
@@ -449,18 +457,57 @@ class Scrapewright:
                 can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
                 recorder.last_html = None
                 record = self.extract(url, schema, allow_llm=can_llm)
+                page_html = recorder.last_html
                 if record is not None and record.data:
-                    yield record
-                    count += 1
-                if recorder.last_html and len(seen) < cap * LIKE_FRONTIER_SLACK:
-                    for neighbour in _matching_links(recorder.last_html, url, shape):
+                    # A record missing a field that other pages had is held
+                    # back rather than shipped with a hole in it.
+                    ready = mender.offer(record, page_html, url) if mender else record
+                    if ready is not None:
+                        yield ready
+                        count += 1
+                if mender is not None and mender.ready:
+                    for mended in mender.mend():
+                        if count >= cap:
+                            break
+                        yield mended
+                        count += 1
+                if page_html and len(seen) < cap * LIKE_FRONTIER_SLACK:
+                    for neighbour in _matching_links(page_html, url, shape):
                         if neighbour not in seen:
                             seen.add(neighbour)
                             queue.append(neighbour)
+
+            if mender is not None:
+                for leftover in mender.drain():
+                    if count >= cap:
+                        break
+                    yield leftover
+                    count += 1
         finally:
             self.fetcher = original
 
     # ── internals ────────────────────────────────────────────────────────────
+    def _mender(self, site_url: str, schema: Schema,
+                allow_llm: bool) -> Mender | None:
+        """Watches for a field the recipe keeps missing. Needs a model: the
+        repair is asking where else that field lives. The cache is keyed by
+        domain, so any URL on the site names the same recipe."""
+        if not allow_llm:
+            return None
+
+        def synthesize(html: str, url: str, narrowed: Schema):
+            self._synth_calls += 1
+            return self.llm.synthesize(html, url, narrowed)
+
+        def reread(recipe, html: str, url: str) -> Record | None:
+            if recipe is None:
+                return None
+            return SelectorExtractor(recipe, schema).extract_record(html, url)
+
+        return Mender(schema=schema, synthesize=synthesize, reread=reread,
+                      save=lambda recipe: self.cache.put(site_url, recipe, schema.name),
+                      recipe_of=lambda: self.cache.get(site_url, schema.name))
+
     def _can_js(self) -> bool:
         return self._js_enabled
 

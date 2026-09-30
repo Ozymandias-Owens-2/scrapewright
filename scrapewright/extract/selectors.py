@@ -60,35 +60,43 @@ class SelectorExtractor(Extractor):
         list_fields = self.schema.list_fields
         values: dict[str, Any] = {}
 
-        for field, selector in self.recipe.fields.items():
-            if not selector:
-                continue
+        for field in self._field_names():
             mode = self.recipe.mode_for(field)
             wants_many = field in list_fields or mode.startswith("attr_all:")
 
-            if wants_many:
+            for selector in self.recipe.selectors_for(field):
+                if field in values:
+                    break          # the better selector already answered
+                if wants_many:
                 # The mode wins when it names an attribute. Otherwise the
                 # element decides: an <img> means its src, a link means its
                 # href, and anything else means its text. Defaulting to src
                 # regardless made list fields work for images and silently
                 # return nothing for every other kind of list -- table cells,
                 # tags, dates -- because a <td> has no src.
-                explicit = mode.split(":", 1)[1] if ":" in mode else None
-                found = []
-                for el in soup.select(selector):
-                    attr = explicit or _natural_attr(el)
-                    raw = (el.get_text(strip=True) if attr == "text"
-                           else el.get(attr))
-                    if raw:
-                        found.append(urljoin(url, raw) if attr in ("src", "href") else raw)
-                if found:
-                    values[field] = found
-            else:
-                value = _read(soup.select_one(selector), mode)
-                if value:
-                    values[field] = value
+                    explicit = mode.split(":", 1)[1] if ":" in mode else None
+                    found = []
+                    for el in soup.select(selector):
+                        attr = explicit or _natural_attr(el)
+                        raw = (el.get_text(strip=True) if attr == "text"
+                               else el.get(attr))
+                        if raw:
+                            found.append(urljoin(url, raw) if attr in ("src", "href")
+                                         else raw)
+                    if found:
+                        values[field] = found
+                else:
+                    value = _read(soup.select_one(selector), mode)
+                    if value:
+                        values[field] = value
 
         return self.schema.coerce(values)
+
+    def _field_names(self) -> list[str]:
+        """Fields the recipe can read, including any known only as alternates."""
+        names = [f for f, sel in self.recipe.fields.items() if sel]
+        names.extend(f for f in self.recipe.alternates if f not in names)
+        return names
 
     def extract_rows(self, html: str, url: str) -> list[Record]:
         """One record per card, for a recipe that names an ``item`` container.
@@ -120,18 +128,19 @@ class SelectorExtractor(Extractor):
         is retried on its last component.
         """
         values: dict[str, Any] = {}
-        for field, selector in self.recipe.fields.items():
-            if not selector or selector == self.recipe.item:
-                continue
+        for field in self._field_names():
             mode = self.recipe.mode_for(field)
-            el = card.select_one(selector)
-            if el is None and " " in selector:
-                el = card.select_one(selector.rsplit(" ", 1)[-1])
-            value = _read(el, mode)
-            if not value:
-                continue
-            attr = mode.split(":", 1)[1] if mode.startswith("attr:") else ""
-            values[field] = urljoin(url, value) if attr in ("src", "href") else value
+            for selector in self.recipe.selectors_for(field):
+                if field in values or selector == self.recipe.item:
+                    continue
+                el = card.select_one(selector)
+                if el is None and " " in selector:
+                    el = card.select_one(selector.rsplit(" ", 1)[-1])
+                value = _read(el, mode)
+                if not value:
+                    continue
+                attr = mode.split(":", 1)[1] if mode.startswith("attr:") else ""
+                values[field] = urljoin(url, value) if attr in ("src", "href") else value
         return values
 
     def extract_record(self, html: str, url: str) -> Record | None:
