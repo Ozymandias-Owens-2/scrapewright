@@ -93,7 +93,9 @@ def cmd_run(args) -> int:
 def cmd_crawl(args) -> int:
     schema = _schema_from(args)
     with Scrapewright(js=args.js) as sw:
-        walk = sw.crawl_rows if getattr(args, "rows", False) else sw.crawl_records
+        mode = "rows" if getattr(args, "rows", False) else args.mode
+        walk = getattr(sw, {"rows": "crawl_rows", "like": "crawl_like",
+                            "links": "crawl_records"}[mode])
         items = list(walk(args.url, schema, max_items=args.max,
                           allow_llm=not args.no_llm))
     _deliver(items, args.out, f"crawl:{schema.name}")
@@ -330,11 +332,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("crawl", help="Walk a whole site from one listing/category URL")
     c.add_argument("url")
-    c.add_argument("--rows", action="store_true",
-                   help="The URL is a listing whose every card is a row. Reads "
-                        "the cards themselves and follows pagination, instead "
-                        "of following links into item pages — for sites whose "
-                        "cards have no link, and for plain tables")
+    c.add_argument("--mode", choices=("links", "rows", "like"), default="links",
+                   help="links: follow links from a listing into item pages "
+                        "(default). rows: the listing's own cards are the "
+                        "rows, walking its pagination — for tables and for "
+                        "sites whose cards carry no link. like: the URL is one "
+                        "item page; find every other page shaped like it")
+    c.add_argument("--rows", action="store_true", help=argparse.SUPPRESS)
     _add_common(c, listing=True)
     c.set_defaults(func=cmd_crawl)
 

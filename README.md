@@ -224,6 +224,7 @@ curl -X POST localhost:8000/v1/extract   -H "X-API-Key: sw_..." -H "Content-Type
 | `POST /v1/detect` | platform + strategy (cheap) |
 | `POST /v1/extract` | one page -> structured record |
 | `POST /v1/crawl` | a whole site -> job id (crawls outlive a request) |
+| ... `mode` | `links` follow a listing into item pages · `rows` read the listing's own cards · `like` one item page -> every page shaped like it |
 | `GET /v1/jobs/{id}` | poll a crawl |
 | `GET /v1/jobs/{id}/download?format=csv\|xlsx\|jsonl` | the finished crawl as a file |
 | `GET /v1/usage` | what this key has consumed, against its plan |

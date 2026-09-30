@@ -81,11 +81,18 @@ class ExtractRequest(BaseModel):
 
 class CrawlRequest(ExtractRequest):
     max_items: int = 25
+    mode: str = Field(
+        default="links",
+        description="How to find the items. 'links': follow links from a "
+                    "listing into item pages. 'rows': the listing's own cards "
+                    "are the rows, walking its pagination. 'like': the URL is "
+                    "one item page; find every other page shaped like it.")
     rows: bool = Field(
-        default=False,
-        description="The URL is a listing whose every card is a row. Walks "
-                    "pagination instead of following links into item pages, "
-                    "and returns one record per card.")
+        default=False, json_schema_extra={"deprecated": True},
+        # Marked deprecated in the schema rather than with pydantic's
+        # `deprecated=True`, which warns on every read -- once per crawl, in
+        # the service log, for a field the caller may not even have sent.
+        description="Shipped before `mode` existed; true means mode='rows'.")
     scroll: int = Field(
         0, ge=0, le=50,
         description="For listings that load more as you scroll: how many times "
@@ -386,6 +393,11 @@ def create_app(store: Store | None = None,
                        key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """Walk a whole site. Returns a job id — crawls outlive a request."""
         balance = enforce_quota(key)
+        # `rows: true` shipped a day before `mode` did, and somebody's script
+        # may still send it.
+        mode = "rows" if req.rows else req.mode
+        if mode not in ("links", "rows", "like"):
+            raise HTTPException(400, "mode must be links, rows or like")
         tier = get_tier(billing.plan_for(key))
         # A record costs one credit, so the balance is itself an item cap: the
         # job stops at what the caller can pay for instead of overdrawing.
@@ -396,7 +408,11 @@ def create_app(store: Store | None = None,
         def work() -> tuple[Any, dict[str, int]]:
             sw, meter = metered_scrapewright(js=req.js,
                                              max_scrolls=req.scroll)
-            walk = sw.crawl_rows if req.rows else sw.crawl_records
+            # Looked up by name, not by building a dict of bound methods:
+            # that evaluates all three, and a pipeline double that implements
+            # only the one under test dies on the other two.
+            walk = getattr(sw, {"rows": "crawl_rows", "like": "crawl_like",
+                                "links": "crawl_records"}[mode])
             try:
                 records = list(walk(req.url, schema, max_items=max_items))
             finally:

@@ -57,6 +57,12 @@
   #crawl-form label { display: block; font-size: .86rem; font-weight: 650;
                       color: var(--ink-soft); margin: 14px 0 5px; }
   #crawl-form input[type=url], #crawl-form input[type=text] { width: 100%; }
+  #crawl-form select {
+    width: 100%; padding: 12px 15px; font: inherit; font-size: .97rem;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  #crawl-form select:focus { outline: none; border-color: var(--clay); }
   #crawl-form input[type=number] { width: 7em; }
   #crawl-form .hint { margin-top: 6px; }
   .opts { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start;
@@ -110,7 +116,14 @@ nothing else to leak.</p>
   say which fields you want. The first page of a new site is compiled once
   (300 credits); every row after that costs one.</p>
   <form id="crawl-form">
-    <label for="crawl-url">Listing URL</label>
+    <label for="crawl-mode">What are you pointing at?</label>
+    <select id="crawl-mode">
+      <option value="rows">A list of items — read every card on it</option>
+      <option value="like">One item — find every other page like it</option>
+      <option value="links">A list whose cards link to their own pages</option>
+    </select>
+
+    <label for="crawl-url">URL</label>
     <input type="url" id="crawl-url" required placeholder="https://someshop.com/collections/all">
 
     <label for="crawl-fields">Fields</label>
@@ -126,9 +139,7 @@ nothing else to leak.</p>
         <input type="number" id="crawl-scroll" value="0" min="0" max="50"></span>
       <label class="check"><input type="checkbox" id="crawl-js"> Render JavaScript
         <span class="hint">5 credits a page — needed only if the page is empty without it</span></label>
-      <label class="check"><input type="checkbox" id="crawl-rows" checked> Every card on the page is a row
-        <span class="hint">For search results, categories and tables. Untick to follow
-        links into item pages instead, where each item has its own page</span></label>
+
     </div>
 
     <button type="submit" id="crawl-go">Collect</button>
@@ -282,6 +293,15 @@ nothing else to leak.</p>
     }
   }
 
+  const PLACEHOLDERS = {
+    rows:  'https://someshop.com/collections/all',
+    like:  'https://someshop.com/products/one-blue-lamp',
+    links: 'https://someshop.com/collections/all'
+  };
+  $('crawl-mode').addEventListener('change', function () {
+    $('crawl-url').placeholder = PLACEHOLDERS[this.value];
+  });
+
   $('crawl-form').addEventListener('submit', async function (e) {
     e.preventDefault();
     const key = keyInput.value.trim();
@@ -299,7 +319,7 @@ nothing else to leak.</p>
           fields: fieldList().length ? fieldList() : null,
           max_items: Number($('crawl-max').value) || 25,
           js: $('crawl-js').checked,
-          rows: $('crawl-rows').checked,
+          mode: $('crawl-mode').value,
           scroll: Number($('crawl-scroll').value) || 0
         })
       });

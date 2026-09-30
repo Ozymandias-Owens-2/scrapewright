@@ -43,6 +43,7 @@ from .extract.selectors import SelectorExtractor
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
 from .fetch import BrowserFetcher, StaticFetcher, looks_js_shelled
+from .like import find_similar
 from .models import Product, Record
 from .schema import PRODUCT_SCHEMA, Schema
 from .validate import Coverage, coverage
@@ -359,6 +360,39 @@ class Scrapewright:
                 return
             url = (frontier._next_page(BeautifulSoup(html, "html.parser"), url)
                    or _guess_next_page(url, page_number))
+
+    # ── By example: one card in, all its siblings out ────────────────────────
+    def crawl_like(self, example_url: str, schema: Schema = PRODUCT_SCHEMA, *,
+                   max_items: int | None = None, allow_llm: bool = True,
+                   include_example: bool = True) -> Iterator[Record]:
+        """Every page shaped like this one.
+
+        The example does double duty: it says which pages the caller wants,
+        and it is the page the recipe is compiled from -- an item page, which
+        is exactly the page a recipe should be learned on. Sibling pages then
+        replay it for nothing.
+        """
+        self._synth_calls = 0
+        count = 0
+
+        if include_example:
+            record = self.extract(example_url, schema, allow_llm=allow_llm)
+            if record is not None and record.data:
+                yield record
+                count += 1
+
+        limit = (max_items - count) if max_items is not None else 500
+        if limit <= 0:
+            return
+        for url in find_similar(example_url, limit=limit, session=self.session,
+                                fetcher=self.fetcher):
+            if max_items is not None and count >= max_items:
+                return
+            can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
+            record = self.extract(url, schema, allow_llm=can_llm)
+            if record is not None and record.data:
+                yield record
+                count += 1
 
     # ── internals ────────────────────────────────────────────────────────────
     def _can_js(self) -> bool:
