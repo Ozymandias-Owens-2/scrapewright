@@ -78,19 +78,57 @@ def _as_literal_ip(host: str) -> str | None:
         return None
 
 
+def _check_encodable(host: str) -> None:
+    """Refuse a hostname that is not a hostname, before anything touches it.
+
+    The IDNA codec rejects a label over 63 characters or an empty one, and it
+    raises ``UnicodeError`` -- not a ``RequestException``. Left to surface
+    from ``getaddrinfo`` deep in a fetch, it walked through every caller's
+    error handling and came out of ``StaticFetcher.fetch`` (documented to
+    return ``None``) and out of the HTTP service as a 500, for what is simply
+    a typo in a URL.
+
+    Checked here, before the DNS lookup, so the refusal is instant and costs
+    no request. Everything legitimate passes: punycode, unicode domains,
+    underscores, a trailing dot, bare IPs.
+    """
+    try:
+        host.encode("idna")
+    except UnicodeError:
+        raise UnsafeUrl(
+            f"{host[:80]} is not a usable hostname: a part of it is empty, "
+            f"longer than 63 characters, or holds characters a domain name "
+            f"cannot carry") from None
+
+
 def resolved_addresses(host: str, port: int | None = None) -> list[str]:
     try:
         infos = socket.getaddrinfo(host, port or 80, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
         return []
+    except UnicodeError:
+        # A hostname the IDNA codec will not encode: a label over 63
+        # characters, an empty label, characters with no punycode form.
+        # getaddrinfo raises this before a packet is sent, and UnicodeError is
+        # not a RequestException -- so it walked straight through every
+        # caller's error handling, out of `fetch` (which promises None), and
+        # out of the service as a 500. It is a malformed URL; say so in the
+        # language the callers already understand.
+        raise UnsafeUrl(
+            f"{host} is not a usable hostname: a part of it is empty, longer "
+            f"than 63 characters, or holds characters a domain cannot carry"
+        ) from None
     return sorted({info[4][0] for info in infos})
 
 
-def check_url(url: str) -> None:
-    """Raise :class:`UnsafeUrl` unless this address belongs to the internet."""
-    if _allow_private():
-        return
+def check_syntax(url: str) -> str:
+    """The part of the check that needs no network. Returns the hostname.
 
+    Scheme, a host at all, and a host the IDNA codec can encode. Split out
+    because a caller at the front door of a service wants to reject a typo
+    immediately: doing the full check there costs a DNS lookup per request,
+    and the fetch is about to do that lookup anyway.
+    """
     parts = urlsplit(url)
     if parts.scheme.lower() not in ALLOWED_SCHEMES:
         raise UnsafeUrl(f"{parts.scheme or 'that'} is not a scheme this service "
@@ -99,6 +137,17 @@ def check_url(url: str) -> None:
     host = parts.hostname
     if not host:
         raise UnsafeUrl("that URL names no host")
+    _check_encodable(host)
+    return host
+
+
+def check_url(url: str) -> None:
+    """Raise :class:`UnsafeUrl` unless this address belongs to the internet."""
+    if _allow_private():
+        return
+
+    parts = urlsplit(url)
+    host = check_syntax(url)
 
     literal = _as_literal_ip(host)
     if literal is not None:

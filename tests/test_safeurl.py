@@ -95,3 +95,38 @@ def test_it_is_a_request_exception():
     import requests
 
     assert issubclass(UnsafeUrl, requests.RequestException)
+
+
+# ── hostnames that are not hostnames ─────────────────────────────────────────
+LONG_LABEL = "https://www." + "a" * 70 + ".nl/"
+
+
+def test_a_label_over_63_characters_is_refused_as_a_bad_url():
+    """The IDNA codec raises UnicodeError, which is not a RequestException,
+    so it used to walk out of `fetch` and out of the service as a 500."""
+    with pytest.raises(UnsafeUrl):
+        check_url(LONG_LABEL)
+
+
+def test_an_empty_label_is_refused_too():
+    with pytest.raises(UnsafeUrl):
+        check_url("https://.example.com/")
+
+
+def test_legitimate_hostnames_still_pass(monkeypatch):
+    """Punycode, unicode domains, underscores and a trailing dot are all
+    real; the check must not sweep them up."""
+    monkeypatch.setattr("scrapewright.safeurl.resolved_addresses",
+                        lambda host, port=None: ["93.184.216.34"])
+    for url in ("https://example.com/", "https://xn--80ak6aa92e.com/",
+                "https://пример.рф/",
+                "https://my_host.example.com/", "https://example.com./"):
+        check_url(url)
+
+
+def test_the_fetcher_returns_none_rather_than_raising():
+    """StaticFetcher.fetch promises None when a page cannot be had. Offline:
+    IDNA fails before any packet is sent."""
+    from scrapewright.fetch import StaticFetcher
+
+    assert StaticFetcher().fetch(LONG_LABEL) is None

@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..detect import detect
+from ..safeurl import UnsafeUrl, check_syntax
 from ..pipeline import Scrapewright
 from ..export import write_any
 from ..models import Record
@@ -107,6 +108,24 @@ class SignupRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     pack: str = Field(description="starter | growth | scale")
+
+
+def _reject_unusable_url(url: str) -> None:
+    """A malformed URL is the caller's mistake, so say 400 and say why.
+
+    Without this a hostname the IDNA codec cannot encode -- a label over 63
+    characters, a typo leaving an empty one -- surfaced as a 502 from the
+    generic failure handler, or as a failed job the caller had to poll for.
+
+    Only the syntax is checked here. Whether the address is one we are willing
+    to reach (SSRF) needs DNS, which would put a lookup in front of every
+    request for an answer the fetch is about to work out anyway; that check
+    stays where the fetching happens.
+    """
+    try:
+        check_syntax(url)
+    except UnsafeUrl as e:
+        raise HTTPException(400, str(e)) from e
 
 
 def _schema_for(fields: list[str] | None) -> Schema:
@@ -357,6 +376,7 @@ def create_app(store: Store | None = None,
     def extract_endpoint(req: ExtractRequest,
                          key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """One page in, one structured record out."""
+        _reject_unusable_url(req.url)
         enforce_quota(key)
         schema = _schema_for(req.fields)
         sw, meter = metered_scrapewright(js=req.js)
@@ -392,6 +412,7 @@ def create_app(store: Store | None = None,
     def crawl_endpoint(req: CrawlRequest,
                        key: ApiKey = Depends(require_key)) -> dict[str, Any]:
         """Walk a whole site. Returns a job id — crawls outlive a request."""
+        _reject_unusable_url(req.url)
         balance = enforce_quota(key)
         # `rows: true` shipped a day before `mode` did, and somebody's script
         # may still send it.
