@@ -56,3 +56,43 @@ def test_the_mcp_tool_reports_it_as_an_error_field(client):
     assert r.status_code == 200
     body = r.json()["result"]["structuredContent"]
     assert body["status"] == 400
+
+
+BLOCKED = "https://walled.test/lst?sort=standard"
+
+
+@pytest.fixture()
+def robots_says_no():
+    """A site whose robots.txt forbids the path the caller typed."""
+    from scrapewright import robots
+    from scrapewright.robots import RobotsPolicy
+
+    class _Response:
+        status_code = 200
+        text = "User-agent: *\nDisallow: /lst?\n"
+
+    class _Session:
+        def get(self, url, **kw): return _Response()
+
+    before = robots.get_policy()
+    robots.set_policy(RobotsPolicy(session=_Session()))
+    yield
+    robots.set_policy(before)
+
+
+def test_a_disallowed_url_says_so_instead_of_returning_nothing(client, robots_says_no):
+    """"Nothing came back, try another page" sent the caller off to debug
+    their selectors for a decision robots.txt made before the first fetch."""
+    c, _ = client
+    r = c.post("/v1/crawl", json={"url": BLOCKED, "mode": "rows"})
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+    assert "robots.txt" in detail and "obey" in detail
+
+
+def test_a_disallowed_url_costs_nothing(client, robots_says_no):
+    c, store = client
+    key_id = c.get("/v1/usage").json()["key_id"]
+    before = store.balance(key_id)
+    c.post("/v1/extract", json={"url": BLOCKED})
+    assert store.balance(key_id) == before

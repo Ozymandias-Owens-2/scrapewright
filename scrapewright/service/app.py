@@ -31,6 +31,8 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..detect import detect
+from ..robots import RobotsDisallowed
+from ..robots import check as check_robots
 from ..safeurl import UnsafeUrl, check_syntax
 from ..pipeline import Scrapewright
 from ..export import write_any
@@ -126,6 +128,19 @@ def _reject_unusable_url(url: str) -> None:
         check_syntax(url)
     except UnsafeUrl as e:
         raise HTTPException(400, str(e)) from e
+
+    # Say when the site itself is the one refusing. Without this a crawl of a
+    # disallowed URL came back as "nothing came back -- try a page that lists
+    # items", which sends the caller off to debug their selectors for a
+    # decision robots.txt made before we fetched anything.
+    try:
+        check_robots(url)
+    except RobotsDisallowed as e:
+        raise HTTPException(
+            403, f"{e}. This is the site's own rule, not ours, and we obey it.") from e
+    except Exception:
+        # robots itself being unreachable is the fetch's problem to report.
+        return
 
 
 def _schema_for(fields: list[str] | None) -> Schema:
