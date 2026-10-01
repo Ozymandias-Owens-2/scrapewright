@@ -57,6 +57,16 @@ Rules:
   digits. A meta description is tidy, sits at the top of the page, and reads
   well -- and it is not a price. Prefer the element a visitor would read the
   value from.
+- Never read a value out of `class`, `id`, `style` or `role`. Those describe
+  the markup, not the content.
+- For a price, select the element holding the **current selling price** on
+  its own. If the page shows a price that has been struck through next to a
+  sale price, that is the sale price. Do not select an element that contains
+  both: its text comes out as "2,999,-1,899,-" and means nothing.
+- For stock or availability, select the element that states it in words --
+  "In stock", "Op voorraad", "2 left". The add-to-cart button is not a
+  statement of availability; use it only when the page says nothing else,
+  and never prefer it to real text.
 
 HTML:
 ```
@@ -96,6 +106,16 @@ Rules:
   digits. A meta description is tidy, sits at the top of the page, and reads
   well -- and it is not a price. Prefer the element a visitor would read the
   value from.
+- Never read a value out of `class`, `id`, `style` or `role`. Those describe
+  the markup, not the content.
+- For a price, select the element holding the **current selling price** on
+  its own. If the page shows a price that has been struck through next to a
+  sale price, that is the sale price. Do not select an element that contains
+  both: its text comes out as "2,999,-1,899,-" and means nothing.
+- For stock or availability, select the element that states it in words --
+  "In stock", "Op voorraad", "2 left". The add-to-cart button is not a
+  statement of availability; use it only when the page says nothing else,
+  and never prefer it to real text.
 
 HTML:
 ```

@@ -28,6 +28,7 @@ browser and the chain runs again; a recipe learned that way is tagged
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable, Iterator
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -55,6 +56,10 @@ from .validate import Coverage, coverage
 # whose price is drawn by a script and a product page with no SKU.
 DEFAULT_ACCEPT_RATIO = 0.5
 DEFAULT_MAX_SYNTH_PER_RUN = 3
+ONE_DAY_SECONDS = 24 * 60 * 60
+# Compilations allowed per site and schema in a day. Enough to heal a
+# redesign, not enough for a half-readable site to bill a crawl to death.
+MAX_COMPILES_PER_DAY = 3
 
 
 def _rows_cache_name(schema: Schema) -> str:
@@ -179,9 +184,27 @@ class Scrapewright:
 
     # ── Generic extraction (self-healing + browser escalation) ───────────────
     def extract(self, url: str, schema: Schema = PRODUCT_SCHEMA, *,
-                allow_llm: bool = True) -> Record | None:
-        """Pull ``schema``'s fields off one page."""
+                allow_llm: bool = True, retry: bool = False) -> Record | None:
+        """Pull ``schema``'s fields off one page.
+
+        ``retry`` asks to try compiling a site that has already failed. Not
+        the default, because the normal thing to do with a page nobody can
+        read is to stop paying to re-read it.
+        """
         recipe = self.cache.get(url, schema.name)
+        if retry:
+            self.cache.clear_failure(url, schema.name)
+        elif allow_llm:
+            # Compiling this site failed recently, or has already run today.
+            # Either way the model is not called again. A page the model
+            # cannot read costs the same every time it is asked -- three
+            # calls and fourteen seconds, on one real example -- and a daily
+            # refresh of one such link burns credits forever. The daily
+            # ceiling applies even when a recipe exists, since a recipe can
+            # be written, found wanting, and rewritten on every page of a
+            # thousand-page crawl.
+            allow_llm = not (self.cache.recently_failed(url, schema.name)
+                             or self._compiled_today(url, schema))
 
         # A recipe learned from rendered HTML tells us to skip the static hop.
         if recipe is not None and recipe.needs_js and self._can_js():
@@ -226,6 +249,9 @@ class Scrapewright:
                     return record
 
         if not self._can_js():
+            if record is None and allow_llm and self.cache.get(url, schema.name) is None:
+                self.cache.note_failure(url, schema.name,
+                                        "synthesis produced no usable recipe")
             return record
 
         rendered = self._browser_fetch(url)
@@ -239,6 +265,14 @@ class Scrapewright:
         recipe = self.cache.get(url, schema.name) or recipe
         rendered_record = self._extract_chain(rendered, url, schema, recipe,
                                               allow_llm, True)
+        if (rendered_record is None and record is None and allow_llm
+                and self.cache.get(url, schema.name) is None):
+            # Everything was tried, including the model, and the page still
+            # reads as nothing. Write that down: asked again tomorrow, this
+            # URL would otherwise cost the same three model calls and
+            # fourteen seconds to return the same nothing.
+            self.cache.note_failure(url, schema.name,
+                                    "synthesis produced no usable recipe")
         # Keep whichever answered more of the question.
         return max((r for r in (rendered_record, record) if r is not None),
                    key=lambda r: sum(1 for v in r.data.values() if v),
@@ -270,6 +304,18 @@ class Scrapewright:
                 recipe.needs_js = False
                 self.cache.put(url, recipe, schema.name)
         return record
+
+    def _compiled_today(self, url: str, schema: Schema) -> bool:
+        """Has this site used up its compilations for the day?
+
+        A ceiling, not a ban. A recipe can be written, found wanting and
+        rewritten, so without one a loop over a thousand pages of a
+        half-readable site pays a thousand times. But it cannot be one per
+        day either: a site that redesigns overnight has to be allowed to
+        heal, and healing is a compilation. Three is enough for a repair and
+        far short of a runaway.
+        """
+        return self.cache.compiles_today(url, schema.name) >= MAX_COMPILES_PER_DAY
 
     def _covers_enough(self, recipe, schema: Schema) -> bool:
         """Does this recipe know where most of the asked-for fields live?

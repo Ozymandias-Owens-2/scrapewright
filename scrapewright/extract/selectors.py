@@ -11,6 +11,7 @@ the same code serves the built-in product schema and any caller-defined one.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urljoin
@@ -30,6 +31,41 @@ def _read(el, mode: str) -> str | None:
     if mode.startswith("attr:"):
         return el.get(mode.split(":", 1)[1]) or None
     return None
+
+
+# Attributes that describe the markup rather than the content. A value read
+# from one of these is never what a visitor sees: asked where "in stock"
+# lives, a model answered the class attribute and the field came back as
+# ['elementor', 'elementor-799', 'elementor-page'] on every Elementor site.
+PLUMBING_ATTRS = frozenset({"class", "id", "style", "role", "rel", "target",
+                            "data-id", "data-elementor-type"})
+
+
+# Two prices in one string means the selector caught the container that
+# holds both the old price and the sale price: fietshokje.nl returned
+# "2,999,-1,899,-". Small numbers are left alone -- "incl. 21% btw" is one
+# price and a tax rate, not two prices.
+_MONEYISH = re.compile(r"\d[\d.,]*\d|\d")
+_PRICE_FLOOR = 100
+
+
+def holds_two_prices(text: str) -> bool:
+    """Did this selector grab both the struck-through price and the real one?"""
+    from ..models import parse_price
+
+    amounts = []
+    for token in _MONEYISH.findall(str(text)):
+        value = parse_price(token)
+        if value is not None and value >= _PRICE_FLOOR:
+            amounts.append(value)
+    return len(amounts) >= 2
+
+
+def is_plumbing(mode: str) -> bool:
+    """Does this mode read the page's wiring instead of its content?"""
+    if ":" not in mode:
+        return False
+    return mode.split(":", 1)[1].strip().lower() in PLUMBING_ATTRS
 
 
 def _natural_attr(element) -> str:
@@ -65,6 +101,14 @@ def prune_unusable(recipe, schema: Schema, html: str, url: str):
     # poisoned a shared fixture across tests, and would do the same to anyone
     # holding a recipe they meant to reuse.
     recipe = recipe.model_copy(deep=True)
+
+    # A selector reading class or id is wrong whatever it returns: those
+    # describe the markup, not the content, and no visitor reads them.
+    for name in list(recipe.fields):
+        if is_plumbing(recipe.modes.get(name, "text")):
+            recipe.fields.pop(name, None)
+            recipe.modes.pop(name, None)
+
     values = SelectorExtractor(recipe, schema).extract_values(html, url)
     for field in schema.fields:
         if field.kind != "number" or field.name not in recipe.fields:
@@ -98,10 +142,13 @@ class SelectorExtractor(Extractor):
         """
         soup = BeautifulSoup(html, "html.parser")
         list_fields = self.schema.list_fields
+        number_fields = {f.name for f in self.schema.fields if f.kind == "number"}
         values: dict[str, Any] = {}
 
         for field in self._field_names():
             mode = self.recipe.mode_for(field)
+            if is_plumbing(mode):
+                continue        # class and id are wiring, never a value
             wants_many = field in list_fields or mode.startswith("attr_all:")
 
             for selector in self.recipe.selectors_for(field):
@@ -127,7 +174,11 @@ class SelectorExtractor(Extractor):
                         values[field] = found
                 else:
                     value = _read(soup.select_one(selector), mode)
-                    if value:
+                    # Two prices glued together is not a price. Empty is
+                    # honest and leaves the recipe looking incomplete, which
+                    # is what gets it another look.
+                    if value and not (field in number_fields
+                                      and holds_two_prices(value)):
                         values[field] = value
 
         return self.schema.coerce(values)

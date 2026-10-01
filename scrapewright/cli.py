@@ -66,7 +66,8 @@ def cmd_run(args) -> int:
         # A custom schema is always page-scoped: there is no platform API that
         # knows about the caller's fields.
         if args.page or custom:
-            record = sw.extract(args.url, schema, allow_llm=not args.no_llm)
+            record = sw.extract(args.url, schema, allow_llm=not args.no_llm,
+                                retry=getattr(args, "retry", False))
             if record is None:
                 print("nothing extracted (try --js if the site renders client-side)",
                       file=sys.stderr)
@@ -305,6 +306,10 @@ def _add_common(parser, *, listing: bool = False) -> None:
                         help="Never call the LLM; deterministic paths only")
     parser.add_argument("-o", "--out", default=None,
                         help="Write to a file: .csv, .xlsx, or .jsonl")
+    parser.add_argument("--retry", action="store_true",
+                        help="Compile a site that failed before. Failures are "
+                             "remembered for a week so a dead page is not paid "
+                             "for every day")
     parser.add_argument("--js", action="store_true",
                         help="Render pages in a headless browser when the static "
                              "fetch comes up empty (needs scrapewright[js])")

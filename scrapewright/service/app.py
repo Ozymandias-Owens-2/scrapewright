@@ -114,6 +114,12 @@ class ExtractRequest(BaseModel):
         description="Custom schema, e.g. ['title', 'salary:number', 'tags:list']. "
                     "Omit for the built-in product schema.")
     js: bool = Field(default=False, description="Render in a headless browser.")
+    retry: bool = Field(
+        default=False,
+        description="Try compiling a site that failed before. A site nobody "
+                    "could read is remembered for a week and answered without "
+                    "calling the model, so a daily refresh of a dead link "
+                    "costs nothing; this asks anyway.")
 
 
 class CrawlRequest(ExtractRequest):
@@ -476,7 +482,7 @@ def create_app(store: Store | None = None,
         schema = _schema_for(req.fields)
         sw, meter = metered_scrapewright(js=req.js)
         try:
-            record = sw.extract(req.url, schema)
+            record = sw.extract(req.url, schema, retry=req.retry)
         except Exception as e:
             # Nothing is charged. The caller cannot act on our failure, and
             # billing for a request that errored is how a service loses the

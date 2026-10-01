@@ -14,12 +14,19 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .extract.base import SelectorRecipe
 
 DEFAULT_SCHEMA_NAME = "product"
+# Where failures live inside the same file. A reserved key rather than a
+# second file: one path to configure, one thing to back up.
+FAILURES_KEY = "__failures__"
+# How long a site stays written off before anyone pays to try it again.
+FAILURE_TTL_SECONDS = 7 * 24 * 60 * 60
+ONE_DAY_SECONDS = 24 * 60 * 60
 
 
 def default_cache_path() -> Path:
@@ -62,16 +69,84 @@ class RecipeCache:
 
     def get(self, url: str, schema_name: str = DEFAULT_SCHEMA_NAME) -> SelectorRecipe | None:
         raw = self._load_raw().get(cache_key(url, schema_name))
+        if not isinstance(raw, dict) or "fields" not in raw and raw.get("at"):
+            return None
         return SelectorRecipe(**raw) if raw else None
 
     def put(self, url: str, recipe: SelectorRecipe,
             schema_name: str | None = None) -> None:
         schema_name = schema_name or recipe.schema_name or DEFAULT_SCHEMA_NAME
         data = self._load_raw()
-        data[cache_key(url, schema_name)] = recipe.model_dump()
+        key = cache_key(url, schema_name)
+        previous = data.get(key) if isinstance(data.get(key), dict) else {}
+        now = time.time()
+        since = previous.get("compiles_since", 0)
+        fresh_day = now - since >= ONE_DAY_SECONDS
+        body = recipe.model_dump()
+        body["compiled_at"] = now
+        # A running count, so a site that keeps being recompiled can be
+        # stopped without forbidding the first honest repair of the day.
+        body["compiles"] = 1 if fresh_day else int(previous.get("compiles", 0)) + 1
+        body["compiles_since"] = now if fresh_day else since
+        data[key] = body
+        # Success retires the note that this site could not be read.
+        data.get(FAILURES_KEY, {}).pop(cache_key(url, schema_name), None)
+        self._write(data)
+
+    def domains(self) -> list[str]:
+        return sorted(k for k in self._load_raw() if k != FAILURES_KEY)
+
+    # ── what did not work, and when ──────────────────────────────────────────
+    def last_compiled(self, url: str,
+                      schema_name: str = DEFAULT_SCHEMA_NAME) -> float | None:
+        raw = self._load_raw().get(cache_key(url, schema_name))
+        return raw.get("compiled_at") if isinstance(raw, dict) else None
+
+    def compiles_today(self, url: str,
+                       schema_name: str = DEFAULT_SCHEMA_NAME) -> int:
+        """How many times this site has been compiled in the last day."""
+        raw = self._load_raw().get(cache_key(url, schema_name))
+        if not isinstance(raw, dict):
+            return 0
+        since = raw.get("compiles_since", 0)
+        if time.time() - since >= ONE_DAY_SECONDS:
+            return 0
+        return int(raw.get("compiles", 0))
+
+    def note_failure(self, url: str, schema_name: str = DEFAULT_SCHEMA_NAME,
+                     reason: str = "") -> None:
+        """Remember that compiling this site produced nothing usable.
+
+        Without this, a page the model cannot read is paid for again on every
+        single request. Two real examples from a day of live use: one product
+        page spent three model calls and fourteen seconds to return nothing,
+        every time it was read. A daily refresh of one such link quietly burns
+        the customer's credits and our tokens forever.
+        """
+        data = self._load_raw()
+        failures = data.setdefault(FAILURES_KEY, {})
+        failures[cache_key(url, schema_name)] = {"at": time.time(),
+                                                 "reason": reason[:200]}
+        self._write(data)
+
+    def failed_at(self, url: str,
+                  schema_name: str = DEFAULT_SCHEMA_NAME) -> float | None:
+        entry = self._load_raw().get(FAILURES_KEY, {}).get(
+            cache_key(url, schema_name))
+        return entry.get("at") if isinstance(entry, dict) else None
+
+    def recently_failed(self, url: str, schema_name: str = DEFAULT_SCHEMA_NAME,
+                        within: float = FAILURE_TTL_SECONDS) -> bool:
+        at = self.failed_at(url, schema_name)
+        return at is not None and (time.time() - at) < within
+
+    def clear_failure(self, url: str,
+                      schema_name: str = DEFAULT_SCHEMA_NAME) -> None:
+        data = self._load_raw()
+        if data.get(FAILURES_KEY, {}).pop(cache_key(url, schema_name), None):
+            self._write(data)
+
+    def _write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False),
                              encoding="utf-8")
-
-    def domains(self) -> list[str]:
-        return sorted(self._load_raw().keys())

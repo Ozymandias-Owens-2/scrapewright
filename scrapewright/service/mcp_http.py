@@ -63,13 +63,19 @@ def mount_hosted_mcp(app: FastAPI, *, require_key: Callable[[str], Any],
 
     @server.tool()
     def extract_page(url: str, ctx: Context, fields: list[str] | None = None,
-                     js: bool = False) -> dict[str, Any]:
+                     js: bool = False, retry: bool = False) -> dict[str, Any]:
         """Extract structured data from ONE page. ``fields`` declares your own
         schema, e.g. ["title", "salary:number", "tags:list"]; omit it for the
         product schema. First call on a new site compiles a recipe (300
-        credits); later calls replay it for 1 credit per row."""
+        credits); later calls replay it for 1 credit per row.
+
+        A site nobody could read is remembered for a week and answered
+        without calling the model, so re-reading a dead page costs nothing.
+        `retry` asks anyway.
+        """
         return guarded(lambda: extract(
-            ExtractRequest(url=url, fields=fields, js=js), key_for(ctx)))
+            ExtractRequest(url=url, fields=fields, js=js, retry=retry),
+            key_for(ctx)))
 
     @server.tool()
     def crawl_site(listing_url: str, ctx: Context, fields: list[str] | None = None,
