@@ -1,0 +1,31 @@
+# Continuous replication of the service database to object storage.
+#
+# Fly's own volume snapshots are daily, which means a day of payments and
+# every API key issued since the last one can be lost. The ledger could be
+# rebuilt from Stripe, but the keys cannot: only their hashes are stored, and
+# nothing else in the world has a copy. Losing the volume locks every
+# customer out permanently.
+#
+# Litestream ships the WAL continuously, so the recovery point is seconds.
+#
+# Not covered: the recipe cache, which is a JSON file rather than SQLite.
+# Recipes cost money to compile but can be compiled again, and nobody is
+# locked out of anything by losing them.
+
+dbs:
+  - path: ${SCRAPEWRIGHT_DB}
+    replicas:
+      - type: s3
+        bucket: ${BUCKET_NAME}
+        path: service-db
+        endpoint: ${AWS_ENDPOINT_URL_S3}
+        region: ${AWS_REGION}
+        # Credentials come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY,
+        # set as Fly secrets by `flyctl storage create`. They are not written
+        # here, so this file is safe in the repository.
+        #
+        # A snapshot a day with an hour of WAL retention: enough to restore
+        # to any point in the last day, and small enough that storage costs
+        # nothing worth measuring.
+        snapshot-interval: 24h
+        retention: 72h
