@@ -25,6 +25,11 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
   # deploy costs real money to work out again.
   SCRAPEWRIGHT_CACHE = "/data/recipes.json"
   SCRAPEWRIGHT_OBEY_ROBOTS = "1"
+  # One render at a time. Eight concurrent ones each started their own
+  # Chromium and the kernel killed the service; raise this only together
+  # with the memory below.
+  BROWSER_SLOTS = "1"
+  MAX_IN_FLIGHT_PER_KEY = "2"
   # Where Stripe sends a customer back after paying, and what the registry
   # listing points at.
   PUBLIC_BASE_URL = "https://scrapewright.app"
@@ -61,4 +66,8 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
   # 1GB because of Chromium: a headless render of a heavy shop page will not fit
   # in 512MB, and the failure mode is the machine being killed mid-crawl rather
   # than an error a caller can read.
-  memory = "1024mb"
+  # Raised from 1024 after a Chromium OOM took the service down. One
+  # browser at a time now (BROWSER_SLOTS), so this is headroom rather than
+  # the fix: a render peaks a few hundred megabytes and the kernel killing
+  # the Playwright driver poisons every later request.
+  memory = "2048mb"

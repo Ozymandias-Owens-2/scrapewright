@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..fetch import BrowserFetcher, StaticFetcher
+from ..fetch import StaticFetcher
 from ..pipeline import Scrapewright
+from .browser_pool import get_pool
 
 
 @dataclass
@@ -36,9 +37,10 @@ class _CountingFetcher:
         return self.inner.fetch(url)
 
     def close(self) -> None:
-        close = getattr(self.inner, "close", None)
-        if close:
-            close()
+        # Deliberately not closing the inner fetcher: the browser belongs to
+        # the process, not to this request. Closing it here is what made
+        # every job pay to start Chromium again.
+        pass
 
 
 @dataclass
@@ -73,11 +75,19 @@ def metered_scrapewright(*, js: bool = False, meter: Meter | None = None,
     The browser is only constructed when ``js`` is requested, so a static job
     never pays for Chromium — the wrapper preserves that laziness by wrapping
     the browser object rather than forcing one into existence.
+
+    The browser itself comes from the process pool rather than being started
+    here. Starting one per request is what let eight concurrent calls start
+    eight Chromiums on a one-gigabyte machine and get the whole service OOM
+    killed. The caller is expected to be holding a slot from that same pool;
+    see :mod:`scrapewright.service.browser_pool`.
     """
     meter = meter or Meter()
     fetcher = _CountingFetcher(StaticFetcher(), meter, "pages")
-    browser = (_CountingFetcher(BrowserFetcher(max_scrolls=max_scrolls),
-                                meter, "renders") if js else None)
+    browser = None
+    if js:
+        shared = get_pool().fetcher(max_scrolls=max_scrolls)
+        browser = _CountingFetcher(shared, meter, "renders")
 
     sw = Scrapewright(fetcher=fetcher, browser=browser, js=js, **kwargs)
     sw.llm = _CountingLlm(sw.llm, meter)

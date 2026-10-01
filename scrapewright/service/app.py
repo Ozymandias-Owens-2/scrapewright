@@ -21,7 +21,9 @@ import os
 import re
 import tempfile
 import time
-from contextlib import asynccontextmanager
+import threading
+from contextlib import asynccontextmanager, contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -90,6 +92,7 @@ DISPOSABLE_EMAIL_DOMAINS = frozenset({
 # it only accepts sites with a catalogue API, where no model is ever called.
 MAX_DEMOS_PER_DAY = 5
 DEMO_MAX_RECORDS = 5
+from .browser_pool import NoBrowserSlot, get_pool
 from .credits import (FREE_MONTHLY_CREDITS, PACKS, PACKS_BY_NAME,
                       credits_for, describe_costs)
 from .plans import DEFAULT_TIER, TIERS, get_tier
@@ -178,6 +181,48 @@ def _job_label(url: str, mode: str) -> str:
     return cleaned.strip(" .-") or "scrapewright"
 
 
+# How many requests one key may have in flight. A single client sending
+# eight at once is what took the service down; two is plenty for a
+# spreadsheet refreshing its rows and leaves the machine for everyone else.
+MAX_IN_FLIGHT_PER_KEY = int(os.environ.get("MAX_IN_FLIGHT_PER_KEY", "2"))
+# A crawl is a background job: it waits for a browser rather than refusing.
+CRAWL_SLOT_WAIT_SECONDS = 15 * 60
+
+
+@contextmanager
+def _nothing():
+    yield
+
+
+class _InFlight:
+    """Counts what each key has running right now."""
+
+    def __init__(self, limit: int = MAX_IN_FLIGHT_PER_KEY):
+        self.limit = limit
+        self._counts: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def hold(self, key_id: str):
+        with self._lock:
+            if self._counts.get(key_id, 0) >= self.limit:
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    f"this key already has {self.limit} requests running. "
+                    f"Wait for one to finish; they are not queued.",
+                    headers={"Retry-After": "5"})
+            self._counts[key_id] = self._counts.get(key_id, 0) + 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                remaining = self._counts.get(key_id, 1) - 1
+                if remaining > 0:
+                    self._counts[key_id] = remaining
+                else:
+                    self._counts.pop(key_id, None)
+
+
 def _reject_unusable_url(url: str) -> None:
     """A malformed URL is the caller's mistake, so say 400 and say why.
 
@@ -236,15 +281,22 @@ def _record_payload(record: Record) -> dict[str, Any]:
             "data": {k: _jsonable(v) for k, v in record.data.items()}}
 
 
+@lru_cache(maxsize=1)
 def browser_available() -> bool:
     """Can this deployment render a client-side page?
 
-    Reported by /health because the answer is a property of the image, not the
-    code: the same build with WITH_JS=0 silently cannot serve `js=true`, and
-    without this the only way to find out is a crawl that comes back empty.
+    Reported by /health because the answer is a property of the image, not
+    the code: the same build with WITH_JS=0 silently cannot serve `js=true`,
+    and without this the only way to find out is a crawl that comes back
+    empty.
 
-    Checks that the executable exists rather than launching it -- a health check
-    that starts Chromium every thirty seconds is its own outage.
+    Checks that the executable exists rather than launching it -- a health
+    check that starts Chromium every thirty seconds is its own outage.
+
+    Cached because it cannot change while the process lives, and because
+    starting the Playwright driver every thirty seconds from an async
+    endpoint would block the event loop -- the very thing the async health
+    check exists to avoid.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -308,6 +360,8 @@ def create_app(store: Store | None = None,
     app.state.store = store
     app.state.billing = billing
     app.state.jobs = jobs
+    app.state.in_flight = _InFlight()
+    app.state.browsers = get_pool()
 
     # ── auth + quota gate ────────────────────────────────────────────────────
     def require_key(x_api_key: str = Header(default="")) -> ApiKey:
@@ -427,13 +481,19 @@ def create_app(store: Store | None = None,
         app.get(path, include_in_schema=False)(_page(filename))
 
     @app.get("/health")
-    def health() -> dict[str, Any]:
+    async def health() -> dict[str, Any]:
         """Whether this instance can actually do its job, not just answer.
 
         A process that serves 200s while its database is unreachable is the
-        worst kind of outage: monitoring says fine, customers say otherwise. So
-        the database is touched for real, and the answers a watchdog needs --
-        can we render, can we sell -- are stated rather than assumed.
+        worst kind of outage: monitoring says fine, customers say otherwise.
+        So the database is touched for real, and the answers a watchdog needs
+        -- can we render, can we sell -- are stated rather than assumed.
+
+        Declared async on purpose, so it answers from the event loop. As an
+        ordinary endpoint it ran in the thread pool, and when eight renders
+        filled that pool the health check stopped answering too: the service
+        looked dead to the monitor at the moment it most needed looking at.
+        Nothing here touches a browser, and the database read is a counter.
         """
         try:
             store.count_events("healthcheck", "never", hours=1)
@@ -454,6 +514,8 @@ def create_app(store: Store | None = None,
             "ok": database,
             "version": __version__,
             "js": browser_available(),
+            "browsers_busy": app.state.browsers.in_use,
+            "browser_slots": app.state.browsers.slots,
             "database": database,
             "payments": hasattr(billing, "checkout_session"),
             "stripe": stripe_mode,
@@ -480,6 +542,11 @@ def create_app(store: Store | None = None,
         _reject_unusable_url(req.url)
         enforce_quota(key, js=req.js)
         schema = _schema_for(req.fields)
+
+        with app.state.in_flight.hold(key.id), _rendering_slot(req.js):
+            return _extract_now(req, key, schema)
+
+    def _extract_now(req: ExtractRequest, key: ApiKey, schema: Schema) -> dict[str, Any]:
         sw, meter = metered_scrapewright(js=req.js)
         try:
             record = sw.extract(req.url, schema, retry=req.retry)
@@ -509,6 +576,25 @@ def create_app(store: Store | None = None,
         payload["credits_left"] = store.balance(key.id)
         return payload
 
+    @contextmanager
+    def _rendering_slot(js: bool):
+        """Hold one of the process's browser slots, or say come back.
+
+        Nothing has been charged at this point, and nothing will be: a 503
+        here costs the caller nothing but the wait. Queuing instead would
+        hold a connection open behind a browser, which is how a slow client
+        turns into a timeout for everybody.
+        """
+        if not js:
+            yield
+            return
+        try:
+            with app.state.browsers.slot():
+                yield
+        except NoBrowserSlot as e:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e),
+                                headers={"Retry-After": "10"}) from e
+
     @app.post("/v1/crawl", status_code=status.HTTP_202_ACCEPTED)
     def crawl_endpoint(req: CrawlRequest,
                        key: ApiKey = Depends(require_key)) -> dict[str, Any]:
@@ -528,6 +614,14 @@ def create_app(store: Store | None = None,
         schema = _schema_for(req.fields)
 
         def work() -> tuple[Any, dict[str, int]]:
+            # A job waits for its turn instead of being refused: it is already
+            # asynchronous, and the caller is polling rather than waiting on
+            # an open connection.
+            with (app.state.browsers.slot(wait=CRAWL_SLOT_WAIT_SECONDS)
+                  if req.js else _nothing()):
+                return _crawl_now(req, key, schema, max_items, mode)
+
+        def _crawl_now(req, key, schema, max_items, mode):
             sw, meter = metered_scrapewright(js=req.js,
                                              max_scrolls=req.scroll)
             # Looked up by name, not by building a dict of bound methods:

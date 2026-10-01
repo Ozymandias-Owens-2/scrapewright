@@ -156,7 +156,6 @@ class BrowserFetcher:
         self._browser = self._launch(self._playwright)
         context = self._browser.new_context(user_agent=self.user_agent)
         self._page = context.new_page()
-        self._rendered = 0
         return self._page
 
     def _launch(self, playwright):
@@ -188,6 +187,22 @@ class BrowserFetcher:
             return playwright.chromium.launch(headless=self.headless,
                                               env=_browser_env())
 
+    @property
+    def alive(self) -> bool:
+        """Is this browser still usable, or did it die under us?
+
+        When the kernel killed Chromium for memory, every later render
+        answered "Connection closed while reading from the driver" until the
+        machine was restarted. A fetcher that knows it is dead can be thrown
+        away and replaced, which costs one request instead of the service.
+        """
+        if self._browser is None:
+            return False
+        try:
+            return bool(self._browser.is_connected())
+        except Exception:
+            return False
+
     def fetch(self, url: str) -> str | None:
         # Rendering is still fetching: the browser path must obey robots too,
         # and it does not go through http.get.
@@ -198,7 +213,11 @@ class BrowserFetcher:
             check(url)
         except (RobotsDisallowed, UnsafeUrl):
             return None
-        page = self._ensure_page()
+        try:
+            page = self._ensure_page()
+        except Exception:
+            self._discard()
+            return None
         try:
             page.goto(url, wait_until=self.wait_until, timeout=self.timeout_ms)
             if self.settle_ms:
@@ -208,7 +227,19 @@ class BrowserFetcher:
             return page.content()
         except Exception:
             # A render failure is a miss, not a crash — the caller falls back.
+            # But a dead browser must not be kept: the next caller would get
+            # the same error forever.
+            if not self.alive:
+                self._discard()
             return None
+
+    def _discard(self) -> None:
+        """Drop a browser that has died so the next request builds a new one."""
+        try:
+            self.close()
+        except Exception:
+            pass
+        self._playwright = self._browser = self._page = None
 
     def close(self) -> None:
         for obj in (self._browser, self._playwright):

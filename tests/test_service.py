@@ -394,7 +394,11 @@ def test_health_reports_what_a_watchdog_needs(tmp_path):
     assert body["ok"] is True
     assert body["database"] is True
     assert set(body) == {"ok", "version", "js", "database", "payments",
-                         "stripe"}
+                         "stripe", "browsers_busy", "browser_slots"}
+    # How many renders are running, and how many may: the outage that made
+    # this necessary was invisible until someone counted Chromiums by hand.
+    assert body["browser_slots"] >= 1
+    assert body["browsers_busy"] == 0
     assert body["stripe"] in {"live", "test", "none"}
 
 
