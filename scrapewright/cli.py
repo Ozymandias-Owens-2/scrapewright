@@ -171,6 +171,54 @@ def cmd_keys(args) -> int:
             print(f"{k.id}  {k.plan:<10} {state:<8} {k.created_at}  {k.label}")
     elif args.action == "revoke":
         print("revoked" if store.revoke(args.key_id) else "no such active key")
+    elif args.action == "recover":
+        return _recover_key(store, args)
+    return 0
+
+
+def _recover_key(store, args) -> int:
+    """Move a lost key's balance onto a fresh one for the same person.
+
+    A key exists only as a hash, so a customer who loses theirs cannot be
+    given it back -- but their credits are not theirs to lose. This is that
+    conversation, as a command: rehearsing it by hand over ssh took five
+    statements and I got one of them wrong, which is not a thing to discover
+    while someone is waiting on their balance.
+    """
+    email = args.key_id or args.email
+    if not email:
+        print("give the address they signed up with: keys recover <email>",
+              file=sys.stderr)
+        return 2
+
+    old_id = store.find_key_by_email(email)
+    if old_id is None:
+        print("no live key for that address. Their email is stored only as a "
+              "hash, so check the spelling with them -- there is no way to "
+              "search for anything close.", file=sys.stderr)
+        return 1
+
+    balance = store.balance(old_id)
+    print(f"found key {old_id} with {balance:,} credits")
+    if args.dry_run:
+        print("dry run: nothing moved")
+        return 0
+
+    raw, new = store.create_key(label=f"{args.label or email} (replaces {old_id})",
+                                plan="metered", email=email)
+    if balance > 0:
+        store.spend(old_id, balance, f"balance moved to {new.id} (key lost)")
+        store.grant(new.id, balance, f"balance moved from {old_id} (key lost)",
+                    idempotency_key=f"recover:{old_id}:{new.id}")
+    store.revoke(old_id)
+
+    print(f"new key id: {new.id}")
+    print(f"moved:      {balance:,} credits")
+    print(f"revoked:    {old_id}")
+    print(f"API key:    {raw}")
+    print("", file=sys.stderr)
+    print("Send that key to them and store nothing: only its hash is kept here.",
+          file=sys.stderr)
     return 0
 
 
@@ -368,8 +416,13 @@ def build_parser() -> argparse.ArgumentParser:
     sv.set_defaults(func=cmd_serve)
 
     k = sub.add_parser("keys", help="Manage service API keys")
-    k.add_argument("action", choices=["create", "list", "revoke"])
-    k.add_argument("key_id", nargs="?", default=None, help="for: revoke")
+    k.add_argument("action", choices=["create", "list", "revoke", "recover"])
+    k.add_argument("key_id", nargs="?", default=None,
+                   help="the key id for revoke; the email address for recover")
+    k.add_argument("--email", default=None,
+                   help="recover: the address they signed up with")
+    k.add_argument("--dry-run", action="store_true",
+                   help="recover: say what would move, move nothing")
     k.add_argument("--label", default=None)
     k.add_argument("--plan", default="metered",
                    choices=["metered", "unlimited"],

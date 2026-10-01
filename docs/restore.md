@@ -59,6 +59,23 @@ ledger can be rebuilt from it:
 
 Drop `--dry-run` once the output looks right.
 
+## A customer lost their key
+
+Not a disaster, just a conversation. Their key exists only as a hash and
+cannot be given back, but their credits can be moved onto a new one. Ask for
+the address they signed up with -- it is stored hashed, so a near miss finds
+nothing and there is no way to search for anything close.
+
+    flyctl ssh console -a scrapewright-api -C "scrapewright keys recover them@example.com --dry-run"
+    flyctl ssh console -a scrapewright-api -C "scrapewright keys recover them@example.com"
+
+It prints the balance it is about to move, mints the replacement, moves the
+credits, revokes the old key, and shows the new key once. Send that to them
+and keep no copy. Both ledgers record where the money went.
+
+Rehearsed on 1 October 2026 with a drill account: 8,500 credits moved, old
+key revoked, replacement on the paying tier.
+
 ## If the replica itself is gone
 
 The keys are unrecoverable — only their hashes were ever stored. What can be
