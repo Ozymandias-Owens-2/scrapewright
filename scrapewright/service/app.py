@@ -297,6 +297,12 @@ def browser_available() -> bool:
     starting the Playwright driver every thirty seconds from an async
     endpoint would block the event loop -- the very thing the async health
     check exists to avoid.
+
+    It must be primed from ordinary synchronous code, which `create_app`
+    does. Playwright's sync API refuses to run inside an asyncio loop, and
+    the first caller here was the async health check: the refusal was
+    swallowed as "no browser" and cached as such, so a deployment that could
+    render perfectly well reported js=false forever.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -362,6 +368,8 @@ def create_app(store: Store | None = None,
     app.state.jobs = jobs
     app.state.in_flight = _InFlight()
     app.state.browsers = get_pool()
+    # Primed here, in synchronous code, for the reason in browser_available().
+    browser_available()
 
     # ── auth + quota gate ────────────────────────────────────────────────────
     def require_key(x_api_key: str = Header(default="")) -> ApiKey:

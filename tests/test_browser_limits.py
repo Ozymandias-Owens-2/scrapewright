@@ -183,3 +183,22 @@ def test_one_key_filling_up_does_not_block_another(client, tmp_path):
         r = c.post("/v1/extract", headers={"X-API-Key": other_raw},
                    json={"url": "https://x.test/p"})
     assert r.status_code != 429
+
+
+def test_health_reports_the_browser_it_actually_has(client):
+    """Playwright's sync API refuses to run inside an asyncio loop. The async
+    health check was its first caller, the refusal was swallowed as "no
+    browser", and lru_cache made that permanent: a deployment that could
+    render perfectly well reported js=false until it was restarted."""
+    from scrapewright.service.app import browser_available
+
+    c, *_ = client
+    assert c.get("/health").json()["js"] == browser_available()
+
+
+def test_the_probe_is_primed_before_any_request(tmp_path):
+    from scrapewright.service.app import browser_available, create_app
+
+    browser_available.cache_clear()
+    create_app(store=Store(str(tmp_path / "s.db")), jobs=JobRegistry())
+    assert browser_available.cache_info().currsize == 1
