@@ -15,6 +15,8 @@ started at most once per run and reused across every page.
 
 from __future__ import annotations
 
+import os
+
 import re
 
 import requests
@@ -96,6 +98,19 @@ def scroll_to_end(page, max_scrolls: int, pause_ms: int = 900) -> int:
     return max_scrolls
 
 
+# What Chromium needs to start, and nothing else. Everything absent from
+# this list -- every API key, every token -- is absent from the browser.
+_BROWSER_ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ",
+                     "DISPLAY", "XDG_RUNTIME_DIR", "PLAYWRIGHT_BROWSERS_PATH")
+
+
+def _browser_env() -> dict[str, str]:
+    env = {name: os.environ[name] for name in _BROWSER_ENV_KEEP
+           if name in os.environ}
+    env.setdefault("HOME", "/tmp")
+    return env
+
+
 class BrowserFetcher:
     """Render a page in headless Chromium and return the resulting DOM.
 
@@ -138,10 +153,40 @@ class BrowserFetcher:
                 "    playwright install chromium"
             ) from e
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self.headless)
+        self._browser = self._launch(self._playwright)
         context = self._browser.new_context(user_agent=self.user_agent)
         self._page = context.new_page()
+        self._rendered = 0
         return self._page
+
+    def _launch(self, playwright):
+        """Start Chromium with as little of our world as it needs.
+
+        It is about to open pages chosen by strangers. Two things are cheap
+        and worth doing even though neither is isolation:
+
+        * **A scrubbed environment.** By default the browser inherits ours,
+          which holds the Stripe key, the model key and the bucket
+          credentials. It needs none of them, and handing them over is
+          handing over the service.
+        * **Chromium's own sandbox**, which Playwright leaves off by default.
+          It needs user namespaces and quietly fails without them, so the
+          launch falls back rather than refusing to render.
+
+        What this does *not* do is isolate anything. The browser still runs
+        as the same user, on the same filesystem, in the same network
+        namespace -- an escape can read the API's own /proc entry and find
+        the secrets there. Only moving the browser to its own machine fixes
+        that; see SECURITY.md.
+        """
+        try:
+            return playwright.chromium.launch(headless=self.headless,
+                                              env=_browser_env(),
+                                              chromium_sandbox=True)
+        except Exception:
+            # No user namespaces here (many container hosts). Still scrubbed.
+            return playwright.chromium.launch(headless=self.headless,
+                                              env=_browser_env())
 
     def fetch(self, url: str) -> str | None:
         # Rendering is still fetching: the browser path must obey robots too,

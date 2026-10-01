@@ -65,9 +65,12 @@ RFC 9309, including the parts that read backwards: 4xx allows, 5xx forbids.
 ## What is not defended yet, and is known
 
 * **Browser isolation.** Chromium renders attacker-chosen pages in the same
-  container as the API process and its secrets. It runs unprivileged, but a
-  separate sandbox with its own CPU, memory and network limits is the right
-  answer and is not built.
+  container as the API process. It is launched with a scrubbed environment,
+  so it holds none of the keys, and with its own sandbox where the kernel
+  allows it -- but it runs as the same user on the same filesystem, so an
+  escape can still read the API's `/proc` entry and find the secrets there.
+  The real answer is a separate machine with no secrets on it, reachable
+  only over the private network. That is the next piece of work.
 * **DNS rebinding**, as above.
 * **Key rotation** is manual.
 
