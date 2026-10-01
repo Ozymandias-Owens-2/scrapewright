@@ -1,0 +1,18 @@
+# Dependencies go bad on their own schedule, not on ours. pip-audit already
+# runs weekly and reports known holes; this opens the pull request that
+# closes them, and watches the Actions themselves, which are code too.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
