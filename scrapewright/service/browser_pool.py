@@ -88,13 +88,28 @@ class BrowserPool:
 
     # ── the browser ──────────────────────────────────────────────────────────
     def fetcher(self, **kwargs):
-        """A fetcher sharing this process's Chromium.
+        """Whatever renders pages for this process.
 
-        Rebuilt when the browser has died: the driver going away used to
-        poison every later request until the machine was restarted.
+        A render service when one is configured -- a machine with no secrets
+        on it, which is where a browser belongs -- and this process's own
+        Chromium otherwise, rebuilt when it has died: the driver going away
+        used to poison every later request until the machine was restarted.
         """
         from ..fetch import BrowserFetcher
+        from .remote_browser import (RENDER_TOKEN_ENV, RENDER_URL_ENV,
+                                     RemoteBrowserFetcher)
 
+        remote = os.environ.get(RENDER_URL_ENV)
+        if remote:
+            # Built per call: it holds no browser, only a URL and a session,
+            # and each caller may want a different scroll depth.
+            return RemoteBrowserFetcher(
+                remote, os.environ.get(RENDER_TOKEN_ENV, ""),
+                local_fallback=self._local_fetcher(BrowserFetcher, **kwargs),
+                **kwargs)
+        return self._local_fetcher(BrowserFetcher, **kwargs)
+
+    def _local_fetcher(self, factory, **kwargs):
         with self._lock:
             if self._fetcher is not None and not self._fetcher.alive:
                 try:
@@ -103,7 +118,7 @@ class BrowserPool:
                     pass
                 self._fetcher = None
             if self._fetcher is None:
-                self._fetcher = BrowserFetcher(**kwargs)
+                self._fetcher = factory(**kwargs)
             return self._fetcher
 
     def close(self) -> None:

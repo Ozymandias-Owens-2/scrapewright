@@ -62,15 +62,24 @@ repository, and its history has been checked.
 **Robots.** The crawler identifies itself honestly and obeys robots.txt per
 RFC 9309, including the parts that read backwards: 4xx allows, 5xx forbids.
 
+**The browser runs on its own machine.** Chromium is the part most likely to
+be broken into -- the delivery mechanism for a renderer exploit is a URL,
+and this service accepts URLs for money. It runs as a separate Fly app with
+no secrets, no volume and no public address, reachable only over the private
+network and only with a shared token, stopping between bursts so a
+compromise does not outlive the traffic that caused it. An escape there
+lands on a container that can fetch web pages, which is what the product
+sells. It also starts with a scrubbed environment and its own sandbox where
+the kernel allows one.
+
+One caveat, stated because it is a real hole in the above: if the render
+service cannot be reached, the API renders in its own process rather than
+failing every customer at once. That puts a browser back beside the secrets.
+It is logged at error level each time, so it is a thing to notice and fix
+rather than a quiet default.
+
 ## What is not defended yet, and is known
 
-* **Browser isolation.** Chromium renders attacker-chosen pages in the same
-  container as the API process. It is launched with a scrubbed environment,
-  so it holds none of the keys, and with its own sandbox where the kernel
-  allows it -- but it runs as the same user on the same filesystem, so an
-  escape can still read the API's `/proc` entry and find the secrets there.
-  The real answer is a separate machine with no secrets on it, reachable
-  only over the private network. That is the next piece of work.
 * **DNS rebinding**, as above.
 * **Key rotation** is manual.
 

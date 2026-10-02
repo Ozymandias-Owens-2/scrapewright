@@ -149,6 +149,26 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_render_service(args) -> int:
+    """Run the browser on its own, with nothing else on the machine."""
+    try:
+        import uvicorn
+    except ImportError:
+        print("The renderer needs FastAPI and uvicorn. Install with:", file=sys.stderr)
+        print('    pip install "scrapewright[service,js]"', file=sys.stderr)
+        return 1
+    from .service.render import RENDER_TOKEN_ENV, create_render_app
+
+    if not os.environ.get(RENDER_TOKEN_ENV):
+        print(f"refusing to start without {RENDER_TOKEN_ENV}: the private "
+              f"network is not authentication, and anything else in the "
+              f"organisation can reach this address", file=sys.stderr)
+        return 1
+    uvicorn.run(create_render_app(), host=args.host, port=args.port,
+                log_level="info")
+    return 0
+
+
 def cmd_keys(args) -> int:
     """Mint, list and revoke API keys for the service."""
     from .service.store import Store
@@ -414,6 +434,13 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--port", type=int, default=8000)
     sv.add_argument("--db", default=_default_db())
     sv.set_defaults(func=cmd_serve)
+
+    rs = sub.add_parser("render-service",
+                        help="Run only the browser, for a machine with no "
+                             "secrets on it")
+    rs.add_argument("--host", default="0.0.0.0")
+    rs.add_argument("--port", type=int, default=8080)
+    rs.set_defaults(func=cmd_render_service)
 
     k = sub.add_parser("keys", help="Manage service API keys")
     k.add_argument("action", choices=["create", "list", "revoke", "recover"])

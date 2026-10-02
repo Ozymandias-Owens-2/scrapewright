@@ -1,0 +1,55 @@
+# The browser, on a machine that holds nothing worth stealing.
+#
+# Deploy with:  flyctl deploy -c fly.render.toml -a scrapewright-render
+#
+# Deliberately missing, and each absence is the point:
+#
+#   no [mounts]      -- no volume, so no database and no recipes
+#   no [http_service] -- no public address; reachable only at
+#                        scrapewright-render.internal over Fly's 6PN
+#   no secrets        -- no Stripe key, no model key, no bucket credentials.
+#                        The only one it has is RENDER_TOKEN, which grants
+#                        nothing but the right to ask it to render a page.
+#
+# An escape from Chromium here lands on a container that can fetch web
+# pages. Next door to the API it would have landed on the business.
+
+app = "scrapewright-render"
+primary_region = "cdg"
+
+[build]
+  [build.args]
+    WITH_JS = "1"
+
+[experimental]
+  # The same image as the API, told to be only the browser.
+  cmd = ["scrapewright", "render-service", "--host", "0.0.0.0", "--port", "8080"]
+
+[env]
+  SCRAPEWRIGHT_OBEY_ROBOTS = "1"
+  HEALTHCHECK_PORT = "8080"
+  # One render at a time, as next door. Raise it with the memory.
+  BROWSER_SLOTS = "1"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  # No `ports` block: nothing is published to the internet. The API reaches
+  # it by private DNS, and nobody else can reach it at all.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [services.concurrency]
+    type = "requests"
+    soft_limit = 1
+    hard_limit = 2
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Chromium peaks a few hundred megabytes; this is one browser plus room
+  # for the page. Nothing else runs here.
+  memory = "1024mb"
+
+# Stopping between bursts is a security property as much as a cost one: a
+# compromised renderer does not outlive the traffic that compromised it.

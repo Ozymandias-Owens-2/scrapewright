@@ -43,7 +43,9 @@ COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN useradd --create-home --uid 10001 scrapewright && chown -R scrapewright /data
 USER scrapewright
 
-EXPOSE 8000
+# 8000 is the API; 8080 is the render service, which the same image runs
+# with a different command and none of the secrets.
+EXPOSE 8000 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"
 
