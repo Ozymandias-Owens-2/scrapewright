@@ -73,6 +73,87 @@ def parse_price(value: Any) -> Decimal | None:
         return None
 
 
+# Field names that mean money even when the caller never said `:number`.
+_MONEY_NAME = re.compile(r"price|prijs|preis|prix|cost|amount|bedrag",
+                         re.IGNORECASE)
+
+
+def is_money_field(field) -> bool:
+    """Should this field's value be read as a price?"""
+    return field.kind == "number" or bool(_MONEY_NAME.search(field.name))
+
+
+# A price arrives with the page's furniture attached. Whitespace between
+# block elements is lost when an element's text is read, so a label in front
+# ("Precio de oferta€37,00", "Onze prijs:€ 54.900"), a call to action behind
+# ("€ 99.950Financieren?") or a tax note ("€ 31.850,-excl. BTW") comes out
+# glued to the number -- and a glued string will not compare with the one
+# stored yesterday, which is the entire job of a price watch.
+_CURRENCY = r"€|\$|£|¥|₽|zł|kr|CHF|EUR|USD|GBP|PLN|SEK|NOK|DKK"
+# Spaces are allowed inside a number only between thousands groups, so a
+# price followed by a year does not read as one eight-digit amount.
+_AMOUNT = (r"\d{1,3}(?:[   ]\d{3}(?!\d))+(?:[.,]\d{1,2})?"
+           r"|\d[\d.,]*\d|\d")
+_MONEY_TEXT = re.compile(
+    rf"(?P<pre>(?:{_CURRENCY})\s*)?"
+    rf"(?P<num>{_AMOUNT})"
+    r"(?P<dash>[,.]-)?"
+    rf"(?P<post>\s*(?:{_CURRENCY}))?",
+    re.IGNORECASE)
+
+# "excl. BTW", "incl. 21% btw", "zzgl. MwSt." -- part of what the price
+# means and not part of the number, so it is kept, beside it.
+_PRICE_NOTE = re.compile(
+    r"(?:in[ck]l\.?|ex[ck]l\.?|zzgl\.?|plus|\+)\s*"
+    r"(?:\d+[.,]?\d*\s*%\s*)?"
+    r"(?:btw|vat|mwst|ust|iva|tva|tax|moms)\b\.?",
+    re.IGNORECASE)
+
+PRICE_ON_REQUEST = "price on request"
+
+
+def clean_money(text: str) -> tuple[str | None, str | None]:
+    """Separate a price from the words around it. Returns ``(value, note)``.
+
+    ``value`` is None when the page is quoting a placeholder -- "€ 0",
+    "€ 0,00". No catalogue sells a camper for nothing; that zero means
+    "price on request", and reporting it as a price is reporting a wrong
+    number, which is worse than reporting none.
+
+    ``note`` carries a tax marker when the page attached one, because
+    "€ 31.850 excl. BTW" and "€ 31.850" are different prices.
+
+    Text with no number in it comes back untouched: that is a selector
+    pointing at the wrong element, and swallowing it would hide the
+    evidence that normally gets the selector thrown away.
+    """
+    raw = str(text)
+    note_match = _PRICE_NOTE.search(raw)
+    if note_match:
+        note = " ".join(note_match.group(0).split())
+        body = raw[:note_match.start()] + raw[note_match.end():]
+    else:
+        note, body = None, raw
+
+    # Prefer an amount that carries a currency: on "Audi A4 2.0 TFSI €24.950"
+    # the first digits on the page belong to the model name.
+    best = None
+    for match in _MONEY_TEXT.finditer(body):
+        if best is None:
+            best = match
+        if match.group("pre") or match.group("post") or match.group("dash"):
+            best = match
+            break
+    if best is None:
+        return raw.strip() or None, note
+
+    value = " ".join("".join(part for part in best.groups() if part).split())
+    amount = parse_price(value)
+    if amount is not None and amount == 0:
+        return None, note or PRICE_ON_REQUEST
+    return value, note
+
+
 class Product(BaseModel):
     """One catalog item, normalized across all sources."""
 

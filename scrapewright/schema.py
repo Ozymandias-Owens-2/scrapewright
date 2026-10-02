@@ -108,15 +108,32 @@ class Schema:
         that is information the page had and a bare number does not. A value
         that will not parse is left exactly as it was found rather than
         dropped: a half-read field beats a missing one.
+
+        A money field is first separated from the words around it: a page
+        writes "Onze prijs:€ 54.900" or "€ 31.850,-excl. BTW" as one run of
+        text, and the label is not part of the price. A tax marker is kept
+        as ``<field>_note`` -- it changes what the number means.
         """
-        from .models import parse_price   # a money parser reads any number
+        # A money parser reads any number.
+        from .models import clean_money, is_money_field, parse_price
 
         out = dict(values)
         for f in self.fields:
-            if f.kind != "number" or f.name not in out:
+            if f.name not in out:
                 continue
             raw = out[f.name]
             if not isinstance(raw, str):
+                continue
+            if is_money_field(f):
+                raw, note = clean_money(raw)
+                if note:
+                    out[f"{f.name}_note"] = note
+                if raw is None:
+                    out.pop(f.name, None)
+                    out.pop(f"{f.name}_text", None)
+                    continue
+                out[f.name] = raw
+            if f.kind != "number":
                 continue
             number = parse_price(raw)
             if number is None:
@@ -128,8 +145,18 @@ class Schema:
         return out
 
     def is_satisfied_by(self, values: dict) -> bool:
-        """A record is usable when every required field came back non-empty."""
-        return all(values.get(name) for name in self.required)
+        """A record is usable when every required field came back non-empty.
+
+        A page that states its price as "€ 0" has answered: it is for sale
+        on request. The cell stays empty, but the record counts as complete,
+        or every such page would look like a broken recipe and buy itself a
+        render and a synthesis it can never be fixed by.
+        """
+        from .models import PRICE_ON_REQUEST
+
+        return all(values.get(name)
+                   or values.get(f"{name}_note") == PRICE_ON_REQUEST
+                   for name in self.required)
 
     def prompt_lines(self) -> str:
         """The field list as the synthesis prompt should see it."""

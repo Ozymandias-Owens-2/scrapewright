@@ -18,7 +18,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from ..models import Product, Record
+from ..models import Product, Record, is_money_field
 from ..schema import PRODUCT_SCHEMA, Schema
 from .base import Extractor, SelectorRecipe
 
@@ -57,13 +57,6 @@ _STRUCK_TAGS = ("del", "s", "strike")
 _STRUCK_CLASS = re.compile(
     r"old|was|regular|normal|normale|previous|compare|strike|"
     r"van[-_]?prijs|oude[-_]?prijs|list[-_]?price", re.IGNORECASE)
-# Field names that mean money even when the caller did not say `:number`.
-_MONEY_NAME = re.compile(r"price|prijs|preis|prix|cost|amount|bedrag",
-                         re.IGNORECASE)
-
-
-def is_money_field(field) -> bool:
-    return field.kind == "number" or bool(_MONEY_NAME.search(field.name))
 
 
 def _without_struck_prices(element):
@@ -97,11 +90,17 @@ def current_price(element) -> str | None:
     something looks again rather than a wrong number being stored.
     """
     text = element.get_text(strip=True) if element is not None else ""
-    if not holds_two_prices(text):
-        return text or None
+    if not text:
+        return None
+    # The markup settles it before any arithmetic does. WooCommerce writes
+    # `<del>10€</del><ins>7,20€</ins>` inside one `.price`, and counting
+    # amounts misses it: a 10 euro bag of coffee is under any floor a
+    # "this looks like two prices" rule can safely use.
     remaining = _without_struck_prices(element).get_text(strip=True)
-    if remaining and not holds_two_prices(remaining):
+    if remaining and remaining != text and not holds_two_prices(remaining):
         return remaining
+    if not holds_two_prices(text):
+        return text
     return None
 
 
@@ -198,7 +197,7 @@ class SelectorExtractor(Extractor):
         """
         soup = BeautifulSoup(html, "html.parser")
         list_fields = self.schema.list_fields
-        money_fields = {f.name for f in self.schema.fields if is_money_field(f)}
+        money_fields = self._money_fields()
         values: dict[str, Any] = {}
 
         for field in self._field_names():
@@ -243,6 +242,9 @@ class SelectorExtractor(Extractor):
 
         return self.schema.coerce(values)
 
+    def _money_fields(self) -> frozenset[str]:
+        return frozenset(f.name for f in self.schema.fields if is_money_field(f))
+
     def _field_names(self) -> list[str]:
         """Fields the recipe can read, including any known only as alternates."""
         names = [f for f, sel in self.recipe.fields.items() if sel]
@@ -279,6 +281,7 @@ class SelectorExtractor(Extractor):
         is retried on its last component.
         """
         values: dict[str, Any] = {}
+        money_fields = self._money_fields()
         for field in self._field_names():
             mode = self.recipe.mode_for(field)
             for selector in self.recipe.selectors_for(field):
@@ -288,6 +291,11 @@ class SelectorExtractor(Extractor):
                 if el is None and " " in selector:
                     el = card.select_one(selector.rsplit(" ", 1)[-1])
                 value = _read(el, mode)
+                # A card on a listing shows its discount the same way a
+                # product page does, and read whole it glues both prices
+                # together just the same.
+                if value and field in money_fields and mode == "text":
+                    value = current_price(el)
                 if not value:
                     continue
                 attr = mode.split(":", 1)[1] if mode.startswith("attr:") else ""
