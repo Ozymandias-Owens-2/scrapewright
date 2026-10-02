@@ -108,6 +108,38 @@ def _matching_links(html: str, base_url: str, shape) -> list[str]:
     return out
 
 
+def _merged_recipe(old, new):
+    """What the site has taught us so far, plus what it just taught us.
+
+    A recipe used to be replaced wholesale when a page defeated it, which
+    works for a site with one layout and fails for a shop with two: each
+    variant recompiles, overwrites the other, and the pages keep taking
+    turns being readable until the daily ceiling stops the merry-go-round.
+
+    Keeping both makes the recipe cumulative: the first selector that
+    matches wins, so one written for a layout this page does not use simply
+    stands aside, and a page of the older sort still replays for nothing.
+
+    The new selector goes first. We are here because the old one failed on
+    the page in hand, and the new one has just been proved on it; leaving a
+    stale selector in front risks it matching something it should not and
+    quietly beating the one we know is right.
+    """
+    if old is None:
+        return new
+    merged = new.model_copy(deep=True)
+    merged.needs_js = new.needs_js or old.needs_js
+    for field in set(old.fields) | set(old.alternates):
+        for selector in old.selectors_for(field):
+            if not merged.fields.get(field):
+                merged.fields[field] = selector
+                if field in (old.modes or {}):
+                    merged.modes[field] = old.modes[field]
+            else:
+                merged.add_alternate(field, selector)
+    return merged
+
+
 def _guess_next_page(url: str, page_number: int) -> str:
     """``?page=N`` when the markup offered no next link.
 
@@ -386,7 +418,13 @@ class Scrapewright:
         # this goes in the cache and is replayed on every other page.
         new_recipe = prune_unusable(new_recipe, schema, html, url)
         new_recipe.needs_js = js_used
-        self.cache.put(url, new_recipe, schema.name)
+        # Added to what the site already taught us, not swapped for it. A
+        # shop that lays its products out two ways -- fietshokje.nl wraps
+        # some prices in `.prijs` and others not -- otherwise recompiles on
+        # every variant, each page overwriting the last, until the daily
+        # ceiling stops it and the next product reads as nothing.
+        self.cache.put(url, _merged_recipe(self.cache.get(url, schema.name),
+                                           new_recipe), schema.name)
         fresh = SelectorExtractor(new_recipe, schema).extract_record(html, url)
         return fresh or jsonld
 
