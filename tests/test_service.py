@@ -165,12 +165,27 @@ def test_running_out_of_credits_refuses_before_any_work(client, stub_core):
     assert len(stub_core["built"]) == built_before
 
 
-def test_daily_synthesis_quota_message_mentions_compiled_sites(client):
+def test_a_spent_compile_budget_still_serves_a_compiled_site(client, stub_core):
+    """The refusal has always promised that already-compiled sites keep
+    working. It used to refuse them anyway; now it means it."""
     c, store, key, _ = client
     store.record(key.id, syntheses=get_tier("metered").daily_syntheses)
+
+    r = c.post("/v1/extract", json={"url": "https://x/1"})
+    assert r.status_code == 200
+
+
+def test_a_spent_compile_budget_says_so_when_nothing_comes_back(client, stub_core):
+    """With nothing cached there is nothing the request could do but call a
+    model it may not call -- and "nothing extracted" would blame the page."""
+    c, store, key, _ = client
+    store.record(key.id, syntheses=get_tier("metered").daily_syntheses)
+    stub_core["record"] = None
+
     r = c.post("/v1/extract", json={"url": "https://x/1"})
     assert r.status_code == 429
     assert "already compiled still work" in r.json()["detail"]
+    assert r.headers["Retry-After"]
 
 
 # ── crawl jobs ───────────────────────────────────────────────────────────────

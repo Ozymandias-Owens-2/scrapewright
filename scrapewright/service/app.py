@@ -194,6 +194,54 @@ def _nothing():
     yield
 
 
+class _SynthesisBudget:
+    """The daily compile limit, counted before the model is called.
+
+    The limit was checked before the work and recorded after it, so two
+    requests arriving together both read "none used today" and both
+    compiled. A free key with a limit of one produced two compilations in a
+    live test, which is twice the model spend the tier exists to cap.
+
+    A reservation closes the window: taken under the same lock that reads
+    the count, released when the request ends. If the request compiled, the
+    database has recorded it by then; if it did not, the reservation simply
+    disappears and nobody's allowance was spent on a request that never
+    called a model.
+
+    Per process, which is the right size here: the database is SQLite with
+    one writer, so there is one process by design. A second machine would
+    need this in the database instead.
+    """
+
+    def __init__(self):
+        self._reserved: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def reserve(self, key_id: str, used_today: int, limit: int):
+        with self._lock:
+            if used_today + self._reserved.get(key_id, 0) >= limit:
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    f"daily new-site limit reached ({limit}); sites already "
+                    f"compiled still work, and cost no credits",
+                    headers={"Retry-After": "3600"})
+            self._reserved[key_id] = self._reserved.get(key_id, 0) + 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                remaining = self._reserved.get(key_id, 1) - 1
+                if remaining > 0:
+                    self._reserved[key_id] = remaining
+                else:
+                    self._reserved.pop(key_id, None)
+
+    def held(self, key_id: str) -> int:
+        with self._lock:
+            return self._reserved.get(key_id, 0)
+
+
 class _InFlight:
     """Counts what each key has running right now."""
 
@@ -367,6 +415,7 @@ def create_app(store: Store | None = None,
     app.state.billing = billing
     app.state.jobs = jobs
     app.state.in_flight = _InFlight()
+    app.state.synthesis = _SynthesisBudget()
     app.state.browsers = get_pool()
     # Primed here, in synchronous code, for the reason in browser_available().
     browser_available()
@@ -407,9 +456,6 @@ def create_app(store: Store | None = None,
             return 10**9   # self-hosted: metered for visibility, never refused
 
         today = store.usage_for_day(key.id)
-        breach = tier.daily_synthesis_limit_hit(today.syntheses)
-        if breach:
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, breach)
         if js:
             breach = tier.daily_render_limit_hit(today.renders)
             if breach:
@@ -551,13 +597,17 @@ def create_app(store: Store | None = None,
         enforce_quota(key, js=req.js)
         schema = _schema_for(req.fields)
 
-        with app.state.in_flight.hold(key.id), _rendering_slot(req.js):
-            return _extract_now(req, key, schema)
+        with (app.state.in_flight.hold(key.id),
+              _synthesis_slot(key) as may_compile,
+              _rendering_slot(req.js)):
+            return _extract_now(req, key, schema, may_compile)
 
-    def _extract_now(req: ExtractRequest, key: ApiKey, schema: Schema) -> dict[str, Any]:
+    def _extract_now(req: ExtractRequest, key: ApiKey, schema: Schema,
+                     may_compile: bool = True) -> dict[str, Any]:
         sw, meter = metered_scrapewright(js=req.js)
         try:
-            record = sw.extract(req.url, schema, retry=req.retry)
+            record = sw.extract(req.url, schema, retry=req.retry,
+                                allow_llm=may_compile)
         except Exception as e:
             # Nothing is charged. The caller cannot act on our failure, and
             # billing for a request that errored is how a service loses the
@@ -574,6 +624,15 @@ def create_app(store: Store | None = None,
                        f"extract {req.url}")
 
         if record is None:
+            if not may_compile:
+                # Nothing came back and we were not allowed to compile: the
+                # honest answer is the limit, not "this page is unreadable".
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    f"daily new-site limit reached "
+                    f"({tier_for(key).daily_syntheses}); sites already "
+                    f"compiled still work, and cost no credits",
+                    headers={"Retry-After": "3600"})
             raise HTTPException(
                 422,  # named constant differs across Starlette versions
                 "nothing extracted; try js=true if the page renders client-side")
@@ -583,6 +642,50 @@ def create_app(store: Store | None = None,
         payload["credits_spent"] = spent
         payload["credits_left"] = store.balance(key.id)
         return payload
+
+    @contextmanager
+    def _synthesis_slot(key: ApiKey):
+        """Hold one of today's compilations, or decide what to do without one.
+
+        Yields whether the model may be called. Three outcomes, and the
+        middle one is the point:
+
+        * budget left -- reserved, and the model may be called;
+        * no budget but the site is already compiled -- the request runs
+          anyway, replaying the cached recipe. The limit is on compiling new
+          sites, and the refusal has always said so in words ("sites already
+          compiled still work") while the code refused everything. The words
+          were right;
+        * no budget and nothing cached -- the extraction comes back empty
+          and the caller is told about the limit rather than told the page
+          was unreadable. Found by trying, not by looking: only the pipeline
+          knows which cache it is reading.
+
+        The reservation is taken whether or not the model turns out to be
+        needed, and handed straight back if it was not: an unused one costs
+        nobody anything.
+        """
+        tier = tier_for(key)
+        if not tier.metered:
+            yield True
+            return
+
+        # Taking the reservation and running the body are separate steps on
+        # purpose. Wrapping the yield in `except HTTPException` meant a 422
+        # raised by the body came back into the generator, was caught here,
+        # and the generator yielded a second time -- "generator didn't stop
+        # after throw()", on every failed extract.
+        used = store.usage_for_day(key.id).syntheses
+        held = app.state.synthesis.reserve(key.id, used, tier.daily_syntheses)
+        try:
+            held.__enter__()
+        except HTTPException:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            held.__exit__(None, None, None)
 
     @contextmanager
     def _rendering_slot(js: bool):
@@ -625,11 +728,13 @@ def create_app(store: Store | None = None,
             # A job waits for its turn instead of being refused: it is already
             # asynchronous, and the caller is polling rather than waiting on
             # an open connection.
-            with (app.state.browsers.slot(wait=CRAWL_SLOT_WAIT_SECONDS)
+            with (_synthesis_slot(key) as may_compile,
+                  app.state.browsers.slot(wait=CRAWL_SLOT_WAIT_SECONDS)
                   if req.js else _nothing()):
-                return _crawl_now(req, key, schema, max_items, mode)
+                return _crawl_now(req, key, schema, max_items, mode, may_compile)
 
-        def _crawl_now(req, key, schema, max_items, mode):
+
+        def _crawl_now(req, key, schema, max_items, mode, may_compile=True):
             sw, meter = metered_scrapewright(js=req.js,
                                              max_scrolls=req.scroll)
             # Looked up by name, not by building a dict of bound methods:
@@ -639,7 +744,8 @@ def create_app(store: Store | None = None,
                                 "links": "crawl_records"}[mode])
             extra = {"listing_url": req.listing_url} if mode == "like" else {}
             try:
-                records = list(walk(req.url, schema, max_items=max_items, **extra))
+                records = list(walk(req.url, schema, max_items=max_items,
+                                    allow_llm=may_compile, **extra))
             finally:
                 sw.close()
             # Only a job that finished is billed. A crawl that died partway may
