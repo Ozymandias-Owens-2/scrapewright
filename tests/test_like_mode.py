@@ -2,9 +2,7 @@
 
 Offline: no network, no model — the sources are fed in as fixtures.
 """
-import pytest
-
-from scrapewright.like import UrlShape, _parse_sitemap, find_similar, url_template
+from scrapewright.like import _parse_sitemap, find_similar, url_template
 
 EXAMPLE = "https://shop.test/products/blue-lamp"
 

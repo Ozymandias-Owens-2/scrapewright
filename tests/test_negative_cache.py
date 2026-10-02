@@ -4,8 +4,6 @@ Two real pages from a day of live use: one spent three model calls and
 fourteen seconds to return nothing, every single time it was read. A daily
 refresh of one such link burns the customer's credits and our tokens forever.
 """
-import time
-
 from scrapewright.cache import FAILURE_TTL_SECONDS, RecipeCache
 from scrapewright.extract.base import SelectorRecipe
 from scrapewright.pipeline import Scrapewright

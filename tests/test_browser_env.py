@@ -1,6 +1,4 @@
 """Chromium opens pages chosen by strangers. It does not need our keys."""
-import os
-
 from scrapewright.fetch import _BROWSER_ENV_KEEP, _browser_env
 
 

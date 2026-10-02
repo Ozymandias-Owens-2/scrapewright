@@ -1,7 +1,5 @@
 """The hosted MCP endpoint is the REST API in a different envelope: same key,
 same credits. Exercised through the real SDK client, offline."""
-import asyncio
-
 import pytest
 from fastapi.testclient import TestClient
 

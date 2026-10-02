@@ -12,7 +12,7 @@ would define their own.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field as _dc_field
+from dataclasses import dataclass
 
 # How a field's value is read once its element is found.
 KINDS = ("text", "number", "url", "list")

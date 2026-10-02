@@ -7,7 +7,6 @@ the part worth pinning down.
 
 from scrapewright.cache import RecipeCache
 from scrapewright.crawl import Frontier
-from scrapewright.extract.base import SelectorRecipe
 from scrapewright.fetch import looks_js_shelled, visible_text_length
 from scrapewright.pipeline import Scrapewright
 from scrapewright.schema import PRODUCT_SCHEMA

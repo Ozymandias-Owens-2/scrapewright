@@ -1,4 +1,3 @@
-import pytest
 
 from scrapewright.cache import RecipeCache
 from scrapewright.extract.base import SelectorRecipe

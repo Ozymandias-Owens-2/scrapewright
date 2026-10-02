@@ -28,7 +28,6 @@ browser and the chain runs again; a recipe learned that way is tagged
 
 from __future__ import annotations
 
-import time
 from collections.abc import Iterable, Iterator
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 

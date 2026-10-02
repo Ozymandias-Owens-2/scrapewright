@@ -8,7 +8,7 @@ stays unaware that it is being billed for, which is how it should be.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ..fetch import StaticFetcher
 from ..pipeline import Scrapewright
