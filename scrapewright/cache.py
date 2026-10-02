@@ -114,7 +114,7 @@ class RecipeCache:
         return int(raw.get("compiles", 0))
 
     def note_failure(self, url: str, schema_name: str = DEFAULT_SCHEMA_NAME,
-                     reason: str = "") -> None:
+                     reason: str = "", mode: str = "static") -> None:
         """Remember that compiling this site produced nothing usable.
 
         Without this, a page the model cannot read is paid for again on every
@@ -122,11 +122,18 @@ class RecipeCache:
         page spent three model calls and fourteen seconds to return nothing,
         every time it was read. A daily refresh of one such link quietly burns
         the customer's credits and our tokens forever.
+
+        ``mode`` records how hard we tried. A page that defeated a plain
+        fetch has not defeated a browser, and the first version of this
+        forgot the difference: a static attempt wrote the site off, and the
+        next request with ``js=true`` skipped the browser entirely and
+        returned nothing -- on a page whose price a browser finds at once.
         """
         data = self._load_raw()
         failures = data.setdefault(FAILURES_KEY, {})
         failures[cache_key(url, schema_name)] = {"at": time.time(),
-                                                 "reason": reason[:200]}
+                                                 "reason": reason[:200],
+                                                 "mode": mode}
         self._write(data)
 
     def failed_at(self, url: str,
@@ -135,10 +142,27 @@ class RecipeCache:
             cache_key(url, schema_name))
         return entry.get("at") if isinstance(entry, dict) else None
 
+    def failure_mode(self, url: str,
+                     schema_name: str = DEFAULT_SCHEMA_NAME) -> str | None:
+        entry = self._load_raw().get(FAILURES_KEY, {}).get(
+            cache_key(url, schema_name))
+        return entry.get("mode", "static") if isinstance(entry, dict) else None
+
     def recently_failed(self, url: str, schema_name: str = DEFAULT_SCHEMA_NAME,
-                        within: float = FAILURE_TTL_SECONDS) -> bool:
+                        within: float = FAILURE_TTL_SECONDS,
+                        *, can_js: bool = False) -> bool:
+        """Has this site been written off in a way that applies to us?
+
+        A failure recorded without a browser says nothing about a request
+        that has one. Only a failure at least as strong as this attempt is
+        a reason not to try.
+        """
         at = self.failed_at(url, schema_name)
-        return at is not None and (time.time() - at) < within
+        if at is None or (time.time() - at) >= within:
+            return False
+        if can_js and self.failure_mode(url, schema_name) == "static":
+            return False
+        return True
 
     def clear_failure(self, url: str,
                       schema_name: str = DEFAULT_SCHEMA_NAME) -> None:

@@ -202,8 +202,10 @@ class Scrapewright:
             # ceiling applies even when a recipe exists, since a recipe can
             # be written, found wanting, and rewritten on every page of a
             # thousand-page crawl.
-            allow_llm = not (self.cache.recently_failed(url, schema.name)
-                             or self._compiled_today(url, schema))
+            allow_llm = not (
+                self.cache.recently_failed(url, schema.name,
+                                           can_js=self._can_js())
+                or self._compiled_today(url, schema))
 
         # A recipe learned from rendered HTML tells us to skip the static hop.
         if recipe is not None and recipe.needs_js and self._can_js():
@@ -249,8 +251,12 @@ class Scrapewright:
 
         if not self._can_js():
             if record is None and allow_llm and self.cache.get(url, schema.name) is None:
+                # "static": this process had no browser, so a request that
+                # has one is entitled to try again rather than inherit a
+                # verdict reached without it.
                 self.cache.note_failure(url, schema.name,
-                                        "synthesis produced no usable recipe")
+                                        "synthesis produced no usable recipe",
+                                        mode="static")
             return record
 
         rendered = self._browser_fetch(url)
@@ -270,8 +276,12 @@ class Scrapewright:
             # reads as nothing. Write that down: asked again tomorrow, this
             # URL would otherwise cost the same three model calls and
             # fourteen seconds to return the same nothing.
+            # Reached after the rendered page, which is the strongest
+            # attempt available: nothing more to try, so the verdict stands
+            # for everyone.
             self.cache.note_failure(url, schema.name,
-                                    "synthesis produced no usable recipe")
+                                    "synthesis produced no usable recipe",
+                                    mode="js")
         # Keep whichever answered more of the question.
         return max((r for r in (rendered_record, record) if r is not None),
                    key=lambda r: sum(1 for v in r.data.values() if v),

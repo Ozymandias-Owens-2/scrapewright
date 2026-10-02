@@ -113,3 +113,88 @@ def test_a_failure_does_not_block_a_site_that_works(tmp_path):
     cache = RecipeCache(tmp_path / "r.json")
     cache.note_failure(URL, SCHEMA.name, "nothing")
     assert not cache.recently_failed("https://other.test/p", SCHEMA.name)
+
+
+# ── a failure without a browser is not a failure with one ────────────────────
+RENDERED = '<html><body><h1>A car</h1><span class="p">19445</span></body></html>'
+
+
+class _StaticOnly:
+    """The page as a plain fetch sees it: a shell with nothing in it."""
+    def fetch(self, url): return BLANK
+    def close(self): pass
+
+
+class _Browser:
+    def __init__(self): self.calls = 0
+    def fetch(self, url):
+        self.calls += 1
+        return RENDERED
+    def close(self): pass
+    alive = True
+
+
+class _ReadsRendered:
+    """A model that can only make sense of the rendered page -- which is the
+    usual case for the sites this matters on."""
+    def __init__(self): self.calls = 0
+    def synthesize(self, html, url, schema=None, **kw):
+        self.calls += 1
+        if "19445" not in html:
+            return None
+        return SelectorRecipe(fields={"price": ".p"})
+
+
+def test_a_static_failure_does_not_stop_the_browser_trying(tmp_path):
+    """Live: a car page failed on static HTML, the failure was written down,
+    and the next request with js=true skipped the browser entirely and
+    returned nothing -- on a page whose price a browser finds at once."""
+    cache = RecipeCache(tmp_path / "r.json")
+    schema = Schema.from_names(["price:number"])
+
+    # First, with no browser available at all.
+    flat = Scrapewright(cache=cache, llm=_ReadsRendered(), fetcher=_StaticOnly())
+    assert flat.extract(URL, schema) is None
+    assert cache.recently_failed(URL, schema.name)
+    assert cache.failure_mode(URL, schema.name) == "static"
+
+    # Then with one. The verdict above was reached without it.
+    browser, llm = _Browser(), _ReadsRendered()
+    rich = Scrapewright(cache=cache, llm=llm, fetcher=_StaticOnly(),
+                        browser=browser)
+    record = rich.extract(URL, schema)
+    assert browser.calls >= 1, "the browser was never tried"
+    assert record is not None and str(record.data["price"]) == "19445"
+
+
+def test_a_failure_with_a_browser_stops_everyone(tmp_path):
+    cache = RecipeCache(tmp_path / "r.json")
+    schema = Schema.from_names(["price:number"])
+
+    class _Hopeless:
+        def __init__(self): self.calls = 0
+        def synthesize(self, html, url, schema=None, **kw):
+            self.calls += 1
+            return None
+
+    llm = _Hopeless()
+    sw = Scrapewright(cache=cache, llm=llm, fetcher=_StaticOnly(),
+                      browser=_Browser())
+    sw.extract(URL, schema)
+    assert cache.failure_mode(URL, schema.name) == "js"
+
+    spent = llm.calls
+    sw.extract(URL, schema)
+    assert llm.calls == spent          # nothing stronger left to try
+
+
+def test_retry_clears_a_failure_of_either_mode(tmp_path):
+    cache = RecipeCache(tmp_path / "r.json")
+    schema = Schema.from_names(["price:number"])
+    cache.note_failure(URL, schema.name, "nothing", mode="js")
+
+    llm = _ReadsRendered()
+    sw = Scrapewright(cache=cache, llm=llm, fetcher=_StaticOnly(),
+                      browser=_Browser())
+    assert sw.extract(URL, schema, retry=True) is not None
+    assert not cache.recently_failed(URL, schema.name, can_js=True)
