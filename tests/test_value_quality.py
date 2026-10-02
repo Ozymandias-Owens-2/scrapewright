@@ -58,9 +58,14 @@ def test_one_price_beside_a_tax_rate_is_still_one_price():
     assert not holds_two_prices("€ 1.899,-")
 
 
-def test_a_container_holding_both_prices_yields_nothing():
+def test_a_container_holding_both_prices_resolves_to_the_sale_one():
+    """It used to yield nothing, which was the safe answer before anything
+    could tell the two apart. The struck-through half says which is which,
+    so now the customer's price comes back. A pair with no such hint still
+    yields nothing -- see tests/test_sale_prices.py."""
     recipe = SelectorRecipe(fields={"price": ".prices"})
-    assert SelectorExtractor(recipe, PRICE_SCHEMA).extract_values(SALE, URL) == {}
+    values = SelectorExtractor(recipe, PRICE_SCHEMA).extract_values(SALE, URL)
+    assert str(values["price"]) == "1899"
 
 
 def test_the_sale_price_on_its_own_is_taken():

@@ -59,10 +59,14 @@ Rules:
   value from.
 - Never read a value out of `class`, `id`, `style` or `role`. Those describe
   the markup, not the content.
-- For a price, select the element holding the **current selling price** on
-  its own. If the page shows a price that has been struck through next to a
-  sale price, that is the sale price. Do not select an element that contains
-  both: its text comes out as "2,999,-1,899,-" and means nothing.
+- For a price, select the element holding the **current selling price** and
+  nothing else. On a discounted page that is the sale price, not the one
+  struck through or labelled as the normal price. Never select their common
+  parent: its text comes out as "2,999,-1,899,-" and means nothing. The
+  page you are reading may happen to have no discount today while others on
+  the same site do, so prefer a selector that names the current price
+  specifically -- `.sale-prijs`, `ins`, `.price--now` -- over one that would
+  pick up both when a discount appears.
 - For stock or availability, select the element that states it in words --
   "In stock", "Op voorraad", "2 left". The add-to-cart button is not a
   statement of availability; use it only when the page says nothing else,
@@ -108,10 +112,14 @@ Rules:
   value from.
 - Never read a value out of `class`, `id`, `style` or `role`. Those describe
   the markup, not the content.
-- For a price, select the element holding the **current selling price** on
-  its own. If the page shows a price that has been struck through next to a
-  sale price, that is the sale price. Do not select an element that contains
-  both: its text comes out as "2,999,-1,899,-" and means nothing.
+- For a price, select the element holding the **current selling price** and
+  nothing else. On a discounted page that is the sale price, not the one
+  struck through or labelled as the normal price. Never select their common
+  parent: its text comes out as "2,999,-1,899,-" and means nothing. The
+  page you are reading may happen to have no discount today while others on
+  the same site do, so prefer a selector that names the current price
+  specifically -- `.sale-prijs`, `ins`, `.price--now` -- over one that would
+  pick up both when a discount appears.
 - For stock or availability, select the element that states it in words --
   "In stock", "Op voorraad", "2 left". The add-to-cart button is not a
   statement of availability; use it only when the page says nothing else,

@@ -49,6 +49,62 @@ _MONEYISH = re.compile(r"\d[\d.,]*\d|\d")
 _PRICE_FLOOR = 100
 
 
+# Markup that says "this was the price before the discount". Tags first,
+# then the class names shops actually use -- fietshokje.nl writes
+# `.normale-prijs` beside `.sale-prijs`, with no <del> anywhere, and the two
+# read as one string: "2,999,-1,899,-".
+_STRUCK_TAGS = ("del", "s", "strike")
+_STRUCK_CLASS = re.compile(
+    r"old|was|regular|normal|normale|previous|compare|strike|"
+    r"van[-_]?prijs|oude[-_]?prijs|list[-_]?price", re.IGNORECASE)
+# Field names that mean money even when the caller did not say `:number`.
+_MONEY_NAME = re.compile(r"price|prijs|preis|prix|cost|amount|bedrag",
+                         re.IGNORECASE)
+
+
+def is_money_field(field) -> bool:
+    return field.kind == "number" or bool(_MONEY_NAME.search(field.name))
+
+
+def _without_struck_prices(element):
+    """A copy of this element with the before-discount price removed."""
+    import copy
+
+    clone = copy.copy(element)
+    try:
+        clone = BeautifulSoup(str(element), "html.parser")
+    except Exception:
+        return element
+    for node in clone.find_all(_STRUCK_TAGS):
+        node.decompose()
+    for node in clone.find_all(attrs={"class": True}):
+        if _STRUCK_CLASS.search(" ".join(node.get("class") or [])):
+            node.decompose()
+    return clone
+
+
+def current_price(element) -> str | None:
+    """The price a customer would pay, from an element holding two.
+
+    A sale page shows the old price beside the new one, and a selector that
+    caught their common parent reads as one string -- "2,999,-1,899,-" --
+    which is not a price and is worse than nothing, because a monitoring
+    customer will not notice a number that is merely wrong.
+
+    Dropping the struck-through or "normal price" part usually leaves
+    exactly one amount, and that is the answer. When it does not, this
+    returns None: the field is then empty, the recipe looks incomplete, and
+    something looks again rather than a wrong number being stored.
+    """
+    text = element.get_text(strip=True) if element is not None else ""
+    if not holds_two_prices(text):
+        return text or None
+    remaining = _without_struck_prices(element).get_text(strip=True)
+    if remaining and not holds_two_prices(remaining):
+        return remaining
+    return None
+
+
 def holds_two_prices(text: str) -> bool:
     """Did this selector grab both the struck-through price and the real one?"""
     from ..models import parse_price
@@ -142,7 +198,7 @@ class SelectorExtractor(Extractor):
         """
         soup = BeautifulSoup(html, "html.parser")
         list_fields = self.schema.list_fields
-        number_fields = {f.name for f in self.schema.fields if f.kind == "number"}
+        money_fields = {f.name for f in self.schema.fields if is_money_field(f)}
         values: dict[str, Any] = {}
 
         for field in self._field_names():
@@ -173,12 +229,16 @@ class SelectorExtractor(Extractor):
                     if found:
                         values[field] = found
                 else:
-                    value = _read(soup.select_one(selector), mode)
-                    # Two prices glued together is not a price. Empty is
-                    # honest and leaves the recipe looking incomplete, which
-                    # is what gets it another look.
-                    if value and not (field in number_fields
-                                      and holds_two_prices(value)):
+                    element = soup.select_one(selector)
+                    value = _read(element, mode)
+                    # Two prices glued together is not a price: drop the
+                    # before-discount half if the markup says which it is,
+                    # and otherwise leave the field empty. Empty is honest,
+                    # and it leaves the recipe looking incomplete, which is
+                    # what gets it another look.
+                    if value and field in money_fields and mode == "text":
+                        value = current_price(element)
+                    if value:
                         values[field] = value
 
         return self.schema.coerce(values)
