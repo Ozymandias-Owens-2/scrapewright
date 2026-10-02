@@ -219,7 +219,15 @@ class BrowserFetcher:
             self._discard()
             return None
         try:
-            page.goto(url, wait_until=self.wait_until, timeout=self.timeout_ms)
+            response = page.goto(url, wait_until=self.wait_until,
+                                 timeout=self.timeout_ms)
+            # A browser renders an error page as happily as a real one, and
+            # the static fetcher has always refused anything but a 200.
+            # Without the same rule here a dead link in a spreadsheet looked
+            # like a page with no price on it, and every refresh paid three
+            # hundred credits to have a model read "404 not found".
+            if response is not None and not 200 <= response.status < 300:
+                return None
             if self.settle_ms:
                 page.wait_for_timeout(self.settle_ms)
             if self.max_scrolls:
