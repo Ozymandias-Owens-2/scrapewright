@@ -28,9 +28,44 @@ log = logging.getLogger("scrapewright.service")
 
 RENDER_URL_ENV = "RENDER_URL"
 RENDER_TOKEN_ENV = "RENDER_TOKEN"
+# Set this when a browser beside the secrets is worse than no browser at
+# all. Off by default: an unreachable renderer would otherwise take
+# `js=true` away from every customer at once, and the likeliest cause is a
+# bad deploy of mine rather than an exploit.
+RENDER_REQUIRED_ENV = "RENDER_REQUIRED"
 # Generous: a render of a heavy page with scrolling takes tens of seconds,
 # and the caller is already holding a browser slot while it waits.
 DEFAULT_TIMEOUT = 120
+
+
+# How many times this process has rendered locally after failing to reach
+# the renderer. The number matters more than any single log line: a
+# fallback is meant to be rare and temporary, and the way it stops being
+# either is quietly, with nobody counting. /health publishes it.
+_fallbacks = 0
+
+
+def fallback_count() -> int:
+    return _fallbacks
+
+
+def probe(timeout: float = 5.0) -> str:
+    """Is the configured renderer answering? "" when none is configured.
+
+    Called once at startup. Two deploys of the render service in a row
+    left it unreachable -- wrong address family, then an unpublished port
+    -- and both times the API carried on rendering locally and saying
+    nothing. An isolated browser that silently is not isolated is worse
+    than no isolation, because it is believed.
+    """
+    base = os.environ.get(RENDER_URL_ENV)
+    if not base:
+        return ""
+    try:
+        response = requests.get(f"{base.rstrip('/')}/health", timeout=timeout)
+    except requests.RequestException as e:
+        return f"unreachable: {e}"
+    return "ok" if response.status_code == 200 else f"answered {response.status_code}"
 
 
 class RemoteBrowserFetcher:
@@ -79,8 +114,14 @@ class RemoteBrowserFetcher:
         return body.get("html")
 
     def _fall_back(self, url: str, why: str) -> str | None:
+        global _fallbacks
+        _fallbacks += 1
         log.error("render service unusable (%s) -- rendering in this process, "
                   "which puts a browser next to the secrets again", why)
+        if os.environ.get(RENDER_REQUIRED_ENV):
+            log.error("%s is set, so this render is refused instead",
+                      RENDER_REQUIRED_ENV)
+            return None
         if self._local_fallback is None:
             return None
         self.used_fallback = True

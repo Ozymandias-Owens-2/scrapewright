@@ -409,7 +409,13 @@ def test_health_reports_what_a_watchdog_needs(tmp_path):
     assert body["ok"] is True
     assert body["database"] is True
     assert set(body) == {"ok", "version", "js", "database", "payments",
-                         "stripe", "browsers_busy", "browser_slots"}
+                         "stripe", "browsers_busy", "browser_slots",
+                         "renderer", "renderer_fallbacks"}
+    # No render service configured here, and nothing has fallen back to a
+    # local browser. Anything but zero means one has been running beside
+    # the secrets, which is the thing the separate machine exists to stop.
+    assert body["renderer"] == ""
+    assert body["renderer_fallbacks"] == 0
     # How many renders are running, and how many may: the outage that made
     # this necessary was invisible until someone counted Chromiums by hand.
     assert body["browser_slots"] >= 1

@@ -192,3 +192,58 @@ def test_without_one_it_renders_here(monkeypatch):
     monkeypatch.setattr("scrapewright.fetch.BrowserFetcher", _Browser)
 
     assert isinstance(BrowserPool(slots=1).fetcher(), _Browser)
+
+
+# ── the fallback is counted, and can be forbidden ────────────────────────────
+def test_a_fallback_is_counted_so_it_cannot_stay_quiet(monkeypatch):
+    """Two deploys in a row left the renderer unreachable and the API went
+    on rendering locally without saying so. An isolated browser that
+    silently is not isolated is worse than none, because it is believed."""
+    from scrapewright.service import remote_browser as rb
+
+    monkeypatch.setattr(rb, "_fallbacks", 0)
+
+    class _Local:
+        def fetch(self, url): return "<html>local</html>"
+        def close(self): pass
+
+    class _Dead:
+        def post(self, *a, **kw): raise rb.requests.RequestException("no route")
+
+    fetcher = rb.RemoteBrowserFetcher("http://renderer:8080", "t",
+                                      local_fallback=_Local(), session=_Dead())
+    assert fetcher.fetch("https://shop.test/p") == "<html>local</html>"
+    assert rb.fallback_count() == 1
+
+
+def test_render_required_refuses_rather_than_falling_back(monkeypatch):
+    from scrapewright.service import remote_browser as rb
+
+    monkeypatch.setenv(rb.RENDER_REQUIRED_ENV, "1")
+
+    class _Local:
+        def fetch(self, url): return "<html>local</html>"
+        def close(self): pass
+
+    class _Dead:
+        def post(self, *a, **kw): raise rb.requests.RequestException("no route")
+
+    fetcher = rb.RemoteBrowserFetcher("http://renderer:8080", "t",
+                                      local_fallback=_Local(), session=_Dead())
+    assert fetcher.fetch("https://shop.test/p") is None
+
+
+def test_probe_says_nothing_when_no_renderer_is_configured(monkeypatch):
+    from scrapewright.service import remote_browser as rb
+
+    monkeypatch.delenv(rb.RENDER_URL_ENV, raising=False)
+    assert rb.probe() == ""
+
+
+def test_probe_reports_an_unreachable_renderer(monkeypatch):
+    from scrapewright.service import remote_browser as rb
+
+    monkeypatch.setenv(rb.RENDER_URL_ENV, "http://renderer:8080")
+    monkeypatch.setattr(rb.requests, "get", lambda *a, **kw:
+                        (_ for _ in ()).throw(rb.requests.RequestException("no route")))
+    assert rb.probe().startswith("unreachable")

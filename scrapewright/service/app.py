@@ -47,6 +47,7 @@ from ..schema import PRODUCT_SCHEMA, Schema
 from .billing import BillingProvider, NoopBilling
 from .jobs import JobRegistry
 from .metering import metered_scrapewright
+from . import remote_browser
 
 log = logging.getLogger("scrapewright.service")
 STATIC = Path(__file__).parent / "static"
@@ -430,6 +431,14 @@ def create_app(store: Store | None = None,
     # Primed here, in synchronous code, for the reason in browser_available().
     browser_available()
 
+    # Ask the render service whether it is there, once, and write down the
+    # answer. Health reports it, so "the browser is isolated" is something
+    # that can be checked rather than something that was once arranged.
+    app.state.renderer = remote_browser.probe()
+    if app.state.renderer:
+        level = log.info if app.state.renderer == "ok" else log.error
+        level("render service: %s", app.state.renderer)
+
     # ── auth + quota gate ────────────────────────────────────────────────────
     def require_key(x_api_key: str = Header(default="")) -> ApiKey:
         key = store.resolve(x_api_key)
@@ -580,6 +589,12 @@ def create_app(store: Store | None = None,
             "js": browser_available(),
             "browsers_busy": app.state.browsers.in_use,
             "browser_slots": app.state.browsers.slots,
+            # "" when no render service is configured; otherwise what it
+            # said at startup, and how often we have rendered locally
+            # since. Anything but 0 fallbacks means a browser has been
+            # running beside the secrets.
+            "renderer": app.state.renderer,
+            "renderer_fallbacks": remote_browser.fallback_count(),
             "database": database,
             "payments": hasattr(billing, "checkout_session"),
             "stripe": stripe_mode,

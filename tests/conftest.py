@@ -42,3 +42,21 @@ def offline_robots():
     robots.set_policy(RobotsPolicy(session=_NoRobotsFile()))
     yield
     robots.set_policy(before)
+
+
+@pytest.fixture(autouse=True)
+def reset_render_fallbacks():
+    """The local-render counter is per process, and so is the test run.
+
+    It is deliberately global -- a count that resets whenever an object is
+    rebuilt would never show the slow drift it exists to catch -- which
+    means one test's fallback is visible to the next one unless it is
+    cleared here.
+    """
+    try:
+        from scrapewright.service import remote_browser
+    except ImportError:          # the service extra is not installed
+        yield
+        return
+    remote_browser._fallbacks = 0
+    yield
