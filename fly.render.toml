@@ -5,8 +5,10 @@
 # Deliberately missing, and each absence is the point:
 #
 #   no [mounts]      -- no volume, so no database and no recipes
-#   no [http_service] -- no public address; reachable only at
-#                        scrapewright-render.internal over Fly's 6PN
+#   no public IP      -- no public address at all. The only address this
+#                        app has is a Flycast one, routable from inside
+#                        the organisation and nowhere else. Deploy with
+#                        --no-public-ips so a redeploy never grants one.
 #   no secrets        -- no Stripe key, no model key, no bucket credentials.
 #                        The only one it has is RENDER_TOKEN, which grants
 #                        nothing but the right to ask it to render a page.
@@ -23,6 +25,13 @@ primary_region = "cdg"
 
 [experimental]
   # The same image as the API, told to be only the browser.
+  #
+  # `0.0.0.0`, because the proxy reaches an instance over IPv4 and
+  # asyncio's IPv6 sockets are v6-only, so there is no one host string
+  # that serves both. Everything arrives through the proxy, so IPv4 is the
+  # one that matters; calling the machine directly at
+  # scrapewright-render.internal (6PN, IPv6) will not work, and should
+  # not be used -- see the Flycast note below.
   cmd = ["scrapewright", "render-service", "--host", "0.0.0.0", "--port", "8080"]
 
 [env]
@@ -34,11 +43,21 @@ primary_region = "cdg"
 [[services]]
   internal_port = 8080
   protocol = "tcp"
-  # No `ports` block: nothing is published to the internet. The API reaches
-  # it by private DNS, and nobody else can reach it at all.
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 0
+
+  # What makes this private is the absence of a public IP address, not the
+  # absence of this block. The proxy listens on 8080 of whatever addresses
+  # the app has, and the app has exactly one: a Flycast address, routable
+  # only from inside the organisation. Without the port published the proxy
+  # would not listen at all -- and then it would never see a request, never
+  # wake a stopped machine, and the renderer would stop once and stay
+  # stopped. Going straight to `.internal` instead bypasses the proxy, and
+  # a stopped machine never wakes: that bypass is what makes auto-stop a
+  # trap rather than a saving.
+  [[services.ports]]
+    port = 8080
 
   [services.concurrency]
     type = "requests"
