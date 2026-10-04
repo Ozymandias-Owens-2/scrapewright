@@ -46,6 +46,22 @@ API_URLS = [
 ]
 
 
+def _session(concurrency: int) -> requests.Session:
+    """A session whose connection pool is as wide as the load.
+
+    The default pool holds ten connections, so a hundred threads on one
+    session queue behind ten and the run measures the client. The first
+    attempt at this reported every request failing at 150 concurrent while
+    the service answered a single request in 66 milliseconds throughout.
+    """
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(pool_connections=concurrency,
+                                            pool_maxsize=concurrency)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 def _timed(call):
     start = time.perf_counter()
     try:
@@ -80,7 +96,7 @@ def _report(name: str, results: list[tuple]) -> int:
 
 def site(concurrency: int = 40, rounds: int = 10) -> int:
     """Everyone who clicks the link, at once. No key, nothing charged."""
-    session = requests.Session()
+    session = _session(concurrency)
     jobs = [SITE_PATHS[i % len(SITE_PATHS)]
             for i in range(concurrency * rounds)]
 
@@ -96,7 +112,7 @@ def api(concurrency: int = 6, rounds: int = 4) -> int:
     """The few who try it for real. Costs credits; needs a key."""
     if not KEY:
         sys.exit("set SCRAPEWRIGHT_KEY first -- this one spends credits")
-    session = requests.Session()
+    session = _session(concurrency)
     session.headers.update({"X-API-Key": KEY})
     jobs = [API_URLS[i % len(API_URLS)] for i in range(concurrency * rounds)]
 
