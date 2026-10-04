@@ -39,7 +39,8 @@ class _Response:
 
 
 class _Page:
-    def __init__(self, status): self.status, self.content_calls = status, 0
+    def __init__(self, status, url="https://shop.test/gone"):
+        self.status, self.content_calls, self.url = status, 0, url
     def goto(self, url, **kwargs): return _Response(self.status)
     def wait_for_timeout(self, ms): pass
     def content(self):

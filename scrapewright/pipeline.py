@@ -42,7 +42,8 @@ from .extract.llm import LlmExtractor
 from .extract.selectors import SelectorExtractor, prune_unusable
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
-from .fetch import BrowserFetcher, StaticFetcher, looks_js_shelled
+from .fetch import (BrowserFetcher, PageGone, StaticFetcher,
+                    looks_js_shelled)
 from .like import canonical, find_similar, url_template
 from .mend import Mender
 from .models import Product, Record
@@ -428,9 +429,21 @@ class Scrapewright:
         fresh = SelectorExtractor(new_recipe, schema).extract_record(html, url)
         return fresh or jsonld
 
+    def _extract_or_skip(self, url: str, schema: Schema, allow_llm: bool):
+        """Extract, treating a vanished page as nothing rather than as fatal.
+
+        A single page is allowed to raise :class:`PageGone` -- the caller
+        asked about that one page and deserves the answer. A crawl is not:
+        one sold item out of a thousand must not end the run.
+        """
+        try:
+            return self.extract(url, schema, allow_llm=allow_llm)
+        except PageGone:
+            return None
+
     # ── Typed product path ───────────────────────────────────────────────────
     def scrape_page(self, url: str, *, allow_llm: bool = True) -> Product | None:
-        record = self.extract(url, PRODUCT_SCHEMA, allow_llm=allow_llm)
+        record = self._extract_or_skip(url, PRODUCT_SCHEMA, allow_llm)
         if record is None or not record.data.get("title"):
             return None
         return record.to_product()
@@ -468,7 +481,7 @@ class Scrapewright:
             if max_items is not None and count >= max_items:
                 return
             can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
-            record = self.extract(url, schema, allow_llm=can_llm)
+            record = self._extract_or_skip(url, schema, can_llm)
             if record is not None and record.data:
                 yield record
                 count += 1
@@ -624,7 +637,7 @@ class Scrapewright:
             mender = self._mender(example_url, schema, allow_llm)
             recorder.last_html = None
             if include_example:
-                record = self.extract(example_url, schema, allow_llm=allow_llm)
+                record = self._extract_or_skip(example_url, schema, allow_llm)
                 if record is not None and record.data:
                     # Through the mender like every other record: it is the
                     # page that shows which fields this site fills at all, and
@@ -653,7 +666,7 @@ class Scrapewright:
                 url = queue.pop(0)
                 can_llm = allow_llm and self._synth_calls < self.max_synth_per_run
                 recorder.last_html = None
-                record = self.extract(url, schema, allow_llm=can_llm)
+                record = self._extract_or_skip(url, schema, can_llm)
                 page_html = recorder.last_html
                 if record is not None and record.data:
                     # A record missing a field that other pages had is held

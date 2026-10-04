@@ -27,6 +27,21 @@ from .base import SelectorRecipe
 # hard-requires it.
 DEFAULT_MODEL = "claude-opus-5"
 
+
+class ProviderError(RuntimeError):
+    """The model provider refused the call. Ours to retry, not the caller's.
+
+    Six synthesis calls in a row came back HTTP 400 one evening and the
+    same six pages went through minutes later. Whatever that was, it was
+    not a verdict on the page: billing for it, remembering it as a failure,
+    or answering 500 would all turn a passing cloud problem into a
+    permanent one for the customer.
+    """
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
+
 _PROMPT = """You are writing a reusable extractor for one web page.
 
 Given the HTML of a single page, return CSS selectors that locate each field.
@@ -239,11 +254,17 @@ class LlmExtractor:
         prompt = template.format(field_lines=schema.prompt_lines(),
                                  html=reduce_html(html, cap=self.html_cap))
         client = self._get_client()
-        msg = client.messages.create(
-            model=self.model,
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        try:
+            msg = client.messages.create(
+                model=self.model,
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as e:
+            # Everything the SDK raises from the call itself is the
+            # provider's, named so the service can answer "try again"
+            # instead of "your page is broken".
+            raise ProviderError(f"{type(e).__name__}: {e}") from e
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
         return recipe_from_text(text, origin=f"llm:{self.model}",
                                 schema_name=schema.name)

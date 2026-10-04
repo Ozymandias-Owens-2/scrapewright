@@ -116,6 +116,46 @@ def holds_two_prices(text: str) -> bool:
     return len(amounts) >= 2
 
 
+def _looks_struck(element, class_depth: int = 2) -> bool:
+    """Is this element the before-discount price rather than the real one?
+
+    The tags are read all the way up -- a `<del>` anywhere above means
+    everything inside it is the old price. Class names are read only on the
+    element and its nearest ancestors, because `_STRUCK_CLASS` matches
+    ordinary words like "normal" and a page wrapped in `<div class="normal">`
+    would otherwise have no current price anywhere in it.
+    """
+    node, depth = element, 0
+    while node is not None and getattr(node, "name", None):
+        if node.name in _STRUCK_TAGS:
+            return True
+        if depth <= class_depth:
+            names = node.get("class") if hasattr(node, "get") else None
+            if names and _STRUCK_CLASS.search(" ".join(names)):
+                return True
+        node, depth = node.parent, depth + 1
+    return False
+
+
+def pick_price_element(elements):
+    """The first match that is not a struck-through price.
+
+    A WooCommerce sale page holds two `.woocommerce-Price-amount`, the first
+    inside a `<del>`, and `select_one` takes the first -- so the recipe read
+    250,00 for a boot selling at 199. Whether that happened at all came down
+    to which selector the model wrote that day, which is a lottery, not a
+    rule.
+
+    If every match is struck the first is returned anyway: the exclusion is
+    meant to choose between candidates, not to empty a field whose markup
+    merely resembles a discount.
+    """
+    for element in elements:
+        if not _looks_struck(element):
+            return element
+    return elements[0] if elements else None
+
+
 def is_plumbing(mode: str) -> bool:
     """Does this mode read the page's wiring instead of its content?"""
     if ":" not in mode:
@@ -228,7 +268,10 @@ class SelectorExtractor(Extractor):
                     if found:
                         values[field] = found
                 else:
-                    element = soup.select_one(selector)
+                    matches = soup.select(selector)
+                    element = (pick_price_element(matches)
+                               if field in money_fields and mode == "text"
+                               else (matches[0] if matches else None))
                     value = _read(element, mode)
                     # Two prices glued together is not a price: drop the
                     # before-discount half if the markup says which it is,
@@ -287,14 +330,17 @@ class SelectorExtractor(Extractor):
             for selector in self.recipe.selectors_for(field):
                 if field in values or selector == self.recipe.item:
                     continue
-                el = card.select_one(selector)
-                if el is None and " " in selector:
-                    el = card.select_one(selector.rsplit(" ", 1)[-1])
+                money = field in money_fields and mode == "text"
+                matches = card.select(selector)
+                if not matches and " " in selector:
+                    matches = card.select(selector.rsplit(" ", 1)[-1])
+                el = (pick_price_element(matches) if money
+                      else (matches[0] if matches else None))
                 value = _read(el, mode)
                 # A card on a listing shows its discount the same way a
                 # product page does, and read whole it glues both prices
                 # together just the same.
-                if value and field in money_fields and mode == "text":
+                if value and money:
                     value = current_price(el)
                 if not value:
                     continue

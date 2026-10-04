@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 import re
+from urllib.parse import urlparse
 
 import requests
 
@@ -54,6 +55,46 @@ def looks_js_shelled(html: str) -> bool:
     return visible_text_length(html) < SHELL_TEXT_THRESHOLD and bool(_SHELL_MARKERS.search(html))
 
 
+class PageGone(Exception):
+    """The item is no longer there, and the site answered with something else.
+
+    A sold caravan does not 404. It redirects to the home page, or back to
+    the listing it was on, and that page has prices on it -- somebody
+    else's. Three runs against one sold camper read 87.500, 28.250 and
+    31.595 euro out of whatever card happened to be first. For a sheet
+    watching a price, a plausible wrong number every morning is worse than
+    an empty cell: it reports a change that did not happen, and it never
+    says "sold".
+    """
+
+    def __init__(self, requested: str, final: str):
+        self.requested, self.final = requested, final
+        super().__init__(f"{requested} now redirects to {final}")
+
+
+def _segments(url: str) -> list[str]:
+    return [s for s in urlparse(url).path.split("/") if s]
+
+
+def redirected_away(requested: str, final: str) -> bool:
+    """Did this redirect land somewhere shallower than what was asked for?
+
+    True when the destination is the site root, or any ancestor of the
+    requested path -- the listing the item sat on. The host is not part of
+    the test: a dealer whose stock moved to a sister site redirects across
+    domains, and the item is just as gone.
+
+    An ordinary redirect keeps the depth: http to https, adding www, a
+    trailing slash, a renamed slug. None of those shorten the path, so none
+    of them read as gone.
+    """
+    want = _segments(requested)
+    if not want:
+        return False            # the root cannot redirect away from itself
+    got = _segments(final)
+    return len(got) < len(want) and want[:len(got)] == got
+
+
 class StaticFetcher:
     """Plain HTTP fetch. The default everywhere."""
 
@@ -69,6 +110,9 @@ class StaticFetcher:
             return None
         if r.status_code != 200:
             return None
+        final = getattr(r, "url", url)
+        if redirected_away(url, final):
+            raise PageGone(url, final)
         return r.text
 
     def close(self) -> None:  # symmetry with BrowserFetcher
@@ -228,11 +272,18 @@ class BrowserFetcher:
             # hundred credits to have a model read "404 not found".
             if response is not None and not 200 <= response.status < 300:
                 return None
+            # Defensively, as everywhere else a page object is read: an
+            # injected double need not implement every attribute.
+            landed = getattr(page, "url", url) or url
+            if redirected_away(url, landed):
+                raise PageGone(url, landed)
             if self.settle_ms:
                 page.wait_for_timeout(self.settle_ms)
             if self.max_scrolls:
                 scroll_to_end(page, self.max_scrolls, self.scroll_pause_ms)
             return page.content()
+        except PageGone:
+            raise       # a verdict about the page, not a failure to read it
         except Exception:
             # A render failure is a miss, not a crash — the caller falls back.
             # But a dead browser must not be kept: the next caller would get

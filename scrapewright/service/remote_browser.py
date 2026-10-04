@@ -22,6 +22,8 @@ import os
 
 import requests
 
+from ..fetch import PageGone
+
 log = logging.getLogger("scrapewright.service")
 
 RENDER_URL_ENV = "RENDER_URL"
@@ -69,9 +71,12 @@ class RemoteBrowserFetcher:
             return self._fall_back(url, f"answered {response.status_code}")
 
         try:
-            return response.json().get("html")
+            body = response.json()
         except ValueError as e:
             return self._fall_back(url, f"answered nonsense: {e}")
+        if body.get("gone"):
+            raise PageGone(url, body["gone"])
+        return body.get("html")
 
     def _fall_back(self, url: str, why: str) -> str | None:
         log.error("render service unusable (%s) -- rendering in this process, "

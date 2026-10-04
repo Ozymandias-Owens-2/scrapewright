@@ -35,6 +35,8 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..detect import detect
+from ..extract.llm import ProviderError
+from ..fetch import PageGone
 from ..robots import RobotsDisallowed
 from ..robots import check as check_robots
 from ..safeurl import UnsafeUrl, check_syntax
@@ -58,6 +60,14 @@ EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 # a single machine can hold a /64 of IPv6 addresses, so counting exact
 # addresses is counting nothing.
 MAX_SIGNUPS_PER_DAY = 3
+
+
+def _gone_detail(e) -> str:
+    """Say where it went: the home page reads differently from the listing."""
+    where = ("the site's home page" if not urlsplit(e.final).path.strip("/")
+             else "the listing it was on")
+    return (f"the page now redirects to {where} ({e.final}); "
+            f"the item is no longer listed")
 
 
 def _signup_network(raw_ip: str) -> str:
@@ -608,6 +618,22 @@ def create_app(store: Store | None = None,
         try:
             record = sw.extract(req.url, schema, retry=req.retry,
                                 allow_llm=may_compile)
+        except PageGone as e:
+            # Not an error on our side and not an empty page: the item is
+            # no longer there. Saying so once is worth more to a watcher
+            # than a plausible price read off whatever the site showed
+            # instead.
+            log.info("gone: %s -> %s", e.requested, e.final)
+            raise HTTPException(status.HTTP_410_GONE, _gone_detail(e)) from e
+        except ProviderError as e:
+            # Theirs, and probably over in a minute. Nothing is charged,
+            # nothing is remembered as a failure, and the caller is told to
+            # come back rather than told their page is unreadable.
+            log.error("model provider refused %s: %s", req.url, e.detail)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "the model provider is temporarily unavailable; try again",
+                headers={"Retry-After": "60"}) from e
         except Exception as e:
             # Nothing is charged. The caller cannot act on our failure, and
             # billing for a request that errored is how a service loses the

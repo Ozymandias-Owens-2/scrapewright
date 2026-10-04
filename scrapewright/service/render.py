@@ -33,6 +33,7 @@ from fastapi import FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from .. import __version__
+from ..fetch import PageGone
 from .browser_pool import BrowserPool, NoBrowserSlot
 
 RENDER_TOKEN_ENV = "RENDER_TOKEN"
@@ -81,6 +82,10 @@ def create_render_app(pool: BrowserPool | None = None) -> FastAPI:
             with pool.slot():
                 fetcher = pool.fetcher(max_scrolls=req.scroll)
                 html = fetcher.fetch(req.url)
+        except PageGone as e:
+            # A verdict, not a failure, and it has to survive the trip home:
+            # the caller cannot see the redirect from where it stands.
+            return {"html": None, "gone": e.final}
         except NoBrowserSlot as e:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e),
                                 headers={"Retry-After": "10"}) from e
