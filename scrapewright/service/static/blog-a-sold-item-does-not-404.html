@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A sold item does not 404</title>
+<meta name="description" content="It redirects to the home page, and your scraper reads a stranger's price. Three runs on one dead listing gave three different plausible numbers.">
+<link rel="canonical" href="https://scrapewright.app/blog/a-sold-item-does-not-404">
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>A sold item does not 404</h1>
+<p class="updated">6 October 2026 · Fedor Dyatlov</p>
+
+<p>I was watching the price of a caravan in a spreadsheet. Every morning it
+refreshed, and every morning the number had changed:</p>
+
+<pre><code>run 1   &euro;87,500
+run 2   &euro;28,250
+run 3   &euro;31,595</code></pre>
+
+<p>Nothing was wrong with the scraper. The caravan had been sold.</p>
+
+<h2>What the site actually does</h2>
+
+<p>I expected a dead listing to return 404. Almost none of them do. What
+happens instead, on dealer sites in particular, is a redirect:</p>
+
+<pre><code>GET /stock/caravan-450-anniversary-996305/
+301 -&gt; https://www.some-other-dealer.nl/</code></pre>
+
+<p>Sometimes to the dealer's own home page, sometimes to the listing page the
+item sat on, and — this one surprised me — sometimes to a <em>different
+company's</em> home page, because the dealership was acquired and the whole
+domain now points at the buyer.</p>
+
+<p>Every one of those destinations is a real page, returns 200, and is full of
+prices. My recipe asked for the first element matching a price selector, found
+one on the first card of whatever stock list it landed on, and returned it with
+a straight face.</p>
+
+<h2>Why this is worse than an error</h2>
+
+<p>If the scraper had returned nothing, the cell would have been empty and the
+person would have looked. If it had returned an error, they would have looked
+sooner.</p>
+
+<p>Instead it returned a plausible number. Not an absurd one — a real caravan
+price, from a real caravan, just not theirs. For somebody monitoring a price,
+that is the worst available output: it reports a change that did not happen,
+and it never once says the thing that actually happened, which is
+<em>sold</em>.</p>
+
+<p>A wrong number is more expensive than a missing one, because a missing one
+gets noticed.</p>
+
+<h2>The rule I settled on</h2>
+
+<p>After all redirects, compare the path you asked for with the path you
+landed on. If the destination is the site root, or any <em>ancestor</em> of
+what you asked for, the item is gone:</p>
+
+<pre><code>/stock/caravan-450-996305/  ->  /              gone
+/stock/caravan-450-996305/  ->  /stock/        gone
+/stock/caravan-450-996305/  ->  other-site.nl/ gone</code></pre>
+
+<p>The host is deliberately not part of the test. A dealer whose stock moved to
+a sister company redirects across domains, and the item is just as gone.</p>
+
+<p>What must keep working is every ordinary redirect, and the useful property
+is that none of them shortens the path:</p>
+
+<pre><code>http -&gt; https                    same depth, fine
+adding or dropping www           same depth, fine
+a trailing slash                 same depth, fine
+a renamed slug                   same depth, fine
+/shop/thing -&gt; /thing            shorter, but not an ancestor, fine</code></pre>
+
+<p>That last one matters. <code>/thing</code> is shorter than
+<code>/shop/thing</code>, but it is not a prefix of it at a segment boundary,
+so it reads as a site reorganising rather than an item disappearing. Checking
+for "shorter" alone would have broken on every such move.</p>
+
+<h2>What the caller gets</h2>
+
+<p>HTTP has a status code for exactly this and almost nobody uses it. The API
+answers <strong>410 Gone</strong>, with the destination in the body so the
+reason is visible:</p>
+
+<pre><code>410 Gone
+the page now redirects to the site's home page
+(https://www.some-other-dealer.nl/); the item is no longer listed</code></pre>
+
+<p>Nothing is charged, nothing is cached as a recipe, and no model is asked to
+make sense of a home page. A crawl steps over one vanished item instead of
+ending.</p>
+
+<h2>The general version</h2>
+
+<p>The bug was not about caravans. It was about treating a 200 as evidence
+that you are looking at what you asked for.</p>
+
+<p>A redirect is the server telling you the thing you wanted is somewhere
+else — and sometimes the honest translation of "somewhere else" is
+"nowhere". Anything that fetches URLs on a schedule and compares today's
+answer to yesterday's should be suspicious of a 200 that arrived at a
+different address than the one it asked for.</p>
+
+<p>Mine wasn't.</p>
+
+<footer>
+The scraper is <a href="https://github.com/Ozymandias-Owens-2/scrapewright">scrapewright</a>,
+MIT, Python.
+<br><br>
+<a href="/blog">more notes</a> &nbsp;·&nbsp;
+<a href="/">scrapewright</a>
+</footer>
+</div>
+</body>
+</html>

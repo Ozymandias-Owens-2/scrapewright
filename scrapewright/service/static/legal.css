@@ -86,3 +86,32 @@ footer {
 footer a { color: var(--ink-soft); }
 
 a:focus-visible, button:focus-visible { outline: 3px solid var(--clay-soft); outline-offset: 2px; }
+
+/* ── the blog ──────────────────────────────────────────────────────────── */
+pre {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .86rem;
+  line-height: 1.6;
+  margin: 0 0 1.4em;
+}
+pre code { background: none; border: 0; padding: 0; font-size: 1em; }
+
+blockquote {
+  margin: 0 0 1.4em;
+  padding-left: 16px;
+  border-left: 3px solid var(--line);
+  color: var(--ink-soft);
+}
+
+.posts { list-style: none; padding: 0; margin: 2em 0 0; }
+.posts li { margin-bottom: 1.8em; }
+.posts h2 { margin: 0 0 .25em; font-size: 1.1rem; }
+.posts h2 a { color: var(--ink); text-decoration: none; }
+.posts h2 a:hover { color: var(--clay); text-decoration: underline; }
+.posts .when { color: var(--ink-soft); font-size: .85rem; }
+.posts p { margin: .3em 0 0; color: var(--ink-soft); font-size: .95rem; }

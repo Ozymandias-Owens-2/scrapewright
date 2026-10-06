@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notes — scrapewright</title>
+<meta name="description" content="Things that went wrong while building a scraper people pay for, and what the fix turned out to be.">
+<link rel="canonical" href="https://scrapewright.app/blog">
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>Notes</h1>
+<p class="updated">Things that went wrong while building a scraper people pay
+for, and what the fix turned out to be. Mostly the parts I had backwards.</p>
+
+<ul class="posts">
+  <li>
+    <h2><a href="/blog/robots-txt">A 403 on robots.txt means you may crawl. A 500 means you may not.</a></h2>
+    <p class="when">6 October 2026</p>
+    <p>RFC 9309 reads backwards until you check it, and I shipped a docstring
+    claiming compliance with both status-code rules inverted.</p>
+  </li>
+  <li>
+    <h2><a href="/blog/a-sold-item-does-not-404">A sold item does not 404</a></h2>
+    <p class="when">6 October 2026</p>
+    <p>It redirects to the home page, and your scraper reads a stranger's
+    price. Three runs on one dead listing gave three different plausible
+    numbers.</p>
+  </li>
+  <li>
+    <h2><a href="/blog/never-bill-in-a-finally-block">Never bill in a finally block</a></h2>
+    <p class="when">6 October 2026</p>
+    <p>Two failed calls charged a customer for work that never happened. The
+    bug was four characters of control flow and it took a month to notice.</p>
+  </li>
+</ul>
+
+<footer>
+<a href="/">scrapewright</a> &nbsp;·&nbsp;
+<a href="https://github.com/Ozymandias-Owens-2/scrapewright">source</a> &nbsp;·&nbsp;
+<a href="/terms">terms</a> &nbsp;·&nbsp;
+<a href="/privacy">privacy</a>
+</footer>
+</div>
+</body>
+</html>

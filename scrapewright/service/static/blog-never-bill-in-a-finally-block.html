@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Never bill in a finally block</title>
+<meta name="description" content="Two failed calls charged a customer for work that never happened. The bug was a few characters of control flow, and billing code is where that kind of bug is most expensive.">
+<link rel="canonical" href="https://scrapewright.app/blog/never-bill-in-a-finally-block">
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>Never bill in a finally block</h1>
+<p class="updated">6 October 2026 · Fedor Dyatlov</p>
+
+<p>The expensive operation in my scraper is one call to a language model. It
+happens once per website: the model reads a page, writes a set of CSS
+selectors, and every page after that is parsed with those selectors for
+nothing. So that one call is what customers pay for, and it is priced
+accordingly.</p>
+
+<p>Here is roughly what I wrote to count it:</p>
+
+<pre><code>try:
+    recipe = self.model.synthesize(html, url)
+finally:
+    meter.syntheses += 1</code></pre>
+
+<p>It looks careful. <code>finally</code> is what you reach for when something
+must not be skipped, and I remember thinking the counter must not be skipped.
+It is the wrong instinct in billing code and it cost a customer twice.</p>
+
+<h2>What happened</h2>
+
+<p>Two extractions failed. Both raised, both incremented the counter on the
+way out, and the customer was charged six hundred credits for two calls that
+produced nothing.</p>
+
+<p>Nobody got an answer and the bill went up. I had not been billed by my own
+provider for either call — a failed request is not a charged request on their
+side either.</p>
+
+<h2>The fix is smaller than the bug</h2>
+
+<pre><code>recipe = self.model.synthesize(html, url)
+meter.syntheses += 1</code></pre>
+
+<p>Count it after it returns. If it raises, the line is never reached, which
+is the correct behaviour and also the obvious one. The <code>try</code> was
+not protecting anything; it was protecting the counter from the truth.</p>
+
+<h2>The rule underneath it</h2>
+
+<p>Cleanup goes in <code>finally</code>. Revenue does not.</p>
+
+<p><code>finally</code> means "whatever happened, do this". That is exactly
+right for closing a file, releasing a lock, shutting down a browser. It is
+exactly wrong for charging money, because <em>what happened</em> is precisely
+the question that decides whether you may charge.</p>
+
+<p>Once stated that way it generalises. Every metered thing in the service now
+follows the same shape:</p>
+
+<ul>
+  <li>Quotas are checked <strong>before</strong> the work, so a refused request
+  is refused for free.</li>
+  <li>Consumption is recorded <strong>after</strong> the work, from what
+  actually completed.</li>
+  <li>A request that raises is never charged. Not the model call, not the page
+  fetch, not the browser render.</li>
+  <li>A job that dies halfway is not charged either, even though it really did
+  cost us renders. We eat those. A failed job that still takes money is worse
+  for us than the renders are.</li>
+</ul>
+
+<p>That last one is not generosity, it is arithmetic. The renders cost cents.
+A customer discovering they were billed for a crawl that returned nothing
+costs the account.</p>
+
+<h2>Why it was easy to miss</h2>
+
+<p>Because the failure mode is invisible from the inside. The counter went up,
+the ledger balanced, every total was internally consistent. Nothing in any log
+said "this one produced no recipe". The only person who could see it was the
+customer, looking at a balance that had dropped further than their results
+explained — and the customer was me, which is the only reason it was ever
+found.</p>
+
+<p>If you bill for anything, the test worth writing is not "does the meter
+count". It is: <strong>make the expensive thing throw, and assert the balance
+did not move.</strong> That test now exists for every billable unit in the
+service, and it is the one I would write first in anything I build next.</p>
+
+<footer>
+The service is <a href="https://github.com/Ozymandias-Owens-2/scrapewright">scrapewright</a>,
+MIT, Python.
+<br><br>
+<a href="/blog">more notes</a> &nbsp;·&nbsp;
+<a href="/">scrapewright</a>
+</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A 403 on robots.txt means you may crawl. A 500 means you may not.</title>
+<meta name="description" content="RFC 9309's status-code rules read backwards until you check the text. Mine were inverted, and an S3 bucket answering 403 is what caught it.">
+<link rel="canonical" href="https://scrapewright.app/blog/robots-txt">
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>A 403 on robots.txt means you may crawl. A 500 means you may not.</h1>
+<p class="updated">6 October 2026 · Fedor Dyatlov</p>
+
+<p>I had both of those backwards, and I shipped it with a docstring
+claiming compliance.</p>
+
+<p>Here is the rule, from RFC 9309 — the 2022 standard that finally wrote
+down what robots.txt means:</p>
+
+<ul>
+  <li><strong>2xx</strong> — parse the file, obey it.</li>
+  <li><strong>4xx</strong> — the file is <em>unavailable</em>. The crawler may
+  access any resource on the server. That includes 401 and 403.</li>
+  <li><strong>5xx</strong> — the file is <em>unreachable</em>. The crawler must
+  assume complete disallow.</li>
+</ul>
+
+<p>So a server answering <code>403 Forbidden</code> on <code>/robots.txt</code>
+is telling you to go ahead, and a server answering
+<code>500 Internal Server Error</code> is telling you to stop. If that feels
+inverted, it did to me too, and my code followed my intuition rather than the
+text.</p>
+
+<h2>Why it reads backwards</h2>
+
+<p>Intuition says <em>forbidden means forbidden</em>. You asked for a file, the
+server said no, clearly this place does not want you.</p>
+
+<p>But robots.txt is not a resource you need permission to read. It is a
+statement of rules, and a 404 or a 403 means <strong>there are no rules
+here</strong>. A site that wants to refuse you says so inside the file. Its
+absence is not a refusal; it is silence, and silence is permission in this
+protocol. That is the whole point of a file you have to go looking for.</p>
+
+<p>The 5xx case has the real reasoning behind it. A server returning 500 is a
+server in trouble. It may well have rules — rules that say no — and it simply
+cannot tell you right now. Assuming "no rules" at the exact moment a site is
+falling over means a crawler piles on precisely when it hurts most. So the
+spec picks the cautious reading: a server that cannot answer has not given you
+permission.</p>
+
+<blockquote>"There is no sign on the door" is not the same as "I can't reach
+the door."</blockquote>
+
+<h2>How I found out</h2>
+
+<p>Not by reading the spec. By a storage bucket.</p>
+
+<p>Object stores and CDNs frequently answer <code>403</code> for
+<code>/robots.txt</code> — not because anyone decided anything, but because the
+file was never uploaded and the bucket policy denies unknown keys instead of
+returning a 404. My crawler read that 403 as "this entire origin is off
+limits" and refused to fetch the images it served.</p>
+
+<p>Nobody had forbidden anything. A file that did not exist, served by a
+storage system with an opinion about missing keys, stopped a job fetching
+images that nobody had protected. I went to the RFC expecting to confirm my reading and found both status-code
+rules exactly inverted.</p>
+
+<p>The docstring above the function said it followed RFC 9309. I wrote that
+docstring. It had been wrong since the day I wrote it, and no test caught it,
+because every test I had written asked the question the way I already believed
+the answer.</p>
+
+<h2>The part the spec leaves to you</h2>
+
+<p>"Must assume complete disallow" raises an obvious question: for how
+long?</p>
+
+<p>Forever is wrong. One stray 503 during a long crawl would lock you out of a
+site that is fine again a minute later. The RFC allows downgrading an
+unreachable verdict to unavailable after "a reasonably long period", which is
+a phrase doing a great deal of work.</p>
+
+<p>I cache the disallow for five minutes and then ask again. Re-asking costs
+one request; being wrong in either direction costs much more. That is a
+judgement call rather than a rule, and it is worth making deliberately — which,
+until I looked, is how I had made none of the other decisions in that
+file.</p>
+
+<h2>Four things to check in your own crawler</h2>
+
+<p>I failed the first two.</p>
+
+<ol>
+  <li>What do you do with a 403 on robots.txt? <em>Crawl.</em></li>
+  <li>What do you do with a 500? <em>Don't, for a while.</em></li>
+  <li>Do you re-check the rules on every redirect hop? A URL that was allowed
+  can redirect to one that is not, and to an origin with entirely different
+  rules. The spec asks you to follow at least five hops.</li>
+  <li>Does your browser path obey robots at all? Mine didn't at first. The
+  static fetcher went through one polite function that checked; the headless
+  browser, added later, went straight to <code>page.goto</code>. Rendering is
+  still fetching. If the rules live in your HTTP helper, everything that does
+  not use that helper is outside them.</li>
+</ol>
+
+<h2>Why bother</h2>
+
+<p>"We obey robots.txt" is the sort of thing that goes in a README and then
+quietly isn't true, because nobody tests the embarrassing paths and the failure
+mode is invisible: you fetch things you should not have, and nothing anywhere
+says so.</p>
+
+<p>The correctness here is not legal cover. It is that a crawler is a guest in
+someone else's house, the house has left instructions, and reading them wrong
+in the polite direction costs you a few pages — while reading them wrong in the
+other direction makes you the thing everyone blocks.</p>
+
+<footer>
+The crawler is <a href="https://github.com/Ozymandias-Owens-2/scrapewright">scrapewright</a>,
+MIT, Python. The robots module is about a hundred lines, and the two paragraphs
+above the imports took longest to get right.
+<br><br>
+<a href="/blog">more notes</a> &nbsp;·&nbsp;
+<a href="/">scrapewright</a>
+</footer>
+</div>
+</body>
+</html>

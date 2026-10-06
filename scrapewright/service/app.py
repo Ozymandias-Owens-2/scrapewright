@@ -542,10 +542,19 @@ def create_app(store: Store | None = None,
                                 headers=PAGE_HEADERS)
         return serve
 
+    # Notes, served from here rather than from a blogging platform: the
+    # link points at the product, and nobody else gets to take the page
+    # down or change the rules under it.
     for path, filename in (("/terms", "terms.html"),
                            ("/refunds", "refunds.html"),
                            ("/privacy", "privacy.html"),
-                           ("/account", "account.html")):
+                           ("/account", "account.html"),
+                           ("/blog", "blog.html"),
+                           ("/blog/robots-txt", "blog-robots.html"),
+                           ("/blog/a-sold-item-does-not-404",
+                            "blog-a-sold-item-does-not-404.html"),
+                           ("/blog/never-bill-in-a-finally-block",
+                            "blog-never-bill-in-a-finally-block.html")):
         app.get(path, include_in_schema=False)(_page(filename))
 
     @app.get("/health")
