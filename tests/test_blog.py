@@ -49,6 +49,19 @@ def test_posts_carry_the_same_headers_as_the_rest_of_the_site(client, path):
     assert r.headers["X-Content-Type-Options"] == "nosniff"
 
 
+def test_the_landing_page_links_to_the_notes():
+    """Pages nobody can reach from the front door do not exist. This one
+    shipped without a link and was found by its author looking for it."""
+    landing = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert landing.count('href="/blog"') >= 2       # header and footer
+
+
+def test_every_post_links_back():
+    for post in POSTS:
+        text = post.read_text(encoding="utf-8")
+        assert 'href="/"' in text, post.name
+
+
 def test_the_index_links_to_every_post():
     index = (STATIC / "blog.html").read_text(encoding="utf-8")
     for path in PATHS[1:]:
