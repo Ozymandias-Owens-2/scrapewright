@@ -1,0 +1,59 @@
+# Deploy from here, not from a laptop.
+#
+# Written because the laptop stopped being able to: Windows Smart App
+# Control blocked flyctl mid-launch-day, the way it has blocked unsigned
+# wheels before. Its verdicts change on their own, which is exactly the
+# property you do not want in the only path to production.
+#
+# Manual only. A deploy is never automatic on push -- that rule predates
+# this file and this file does not change it.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Which app to deploy
+        type: choice
+        default: scrapewright-api
+        options:
+          - scrapewright-api
+          - scrapewright-render
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # One deploy of an app at a time. Two rolling restarts of the same
+    # single machine would fight over its lease.
+    concurrency: deploy-${{ inputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tests must pass before anything ships
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          python -m pytest -q
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ "${{ inputs.app }}" = "scrapewright-render" ]; then
+            # --no-public-ips: the renderer is reachable only on the
+            # private network, and a redeploy must never grant it an
+            # address of its own.
+            flyctl deploy -c fly.render.toml -a scrapewright-render --no-public-ips
+          else
+            flyctl deploy -a scrapewright-api
+          fi
+
+      - name: Say what is live
+        run: curl -fsS https://scrapewright.app/health
