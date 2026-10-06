@@ -200,11 +200,6 @@ MAX_IN_FLIGHT_PER_KEY = int(os.environ.get("MAX_IN_FLIGHT_PER_KEY", "2"))
 CRAWL_SLOT_WAIT_SECONDS = 15 * 60
 
 
-@contextmanager
-def _nothing():
-    yield
-
-
 class _SynthesisBudget:
     """The daily compile limit, counted before the model is called.
 
@@ -622,9 +617,12 @@ def create_app(store: Store | None = None,
         enforce_quota(key, js=req.js)
         schema = _schema_for(req.fields)
 
+        # No browser slot is taken here. It is taken around the render
+        # itself, deeper in, because a request holding the only slot
+        # through a sixty-second model call refused every other caller --
+        # including ones whose pages never need a browser at all.
         with (app.state.in_flight.hold(key.id),
-              _synthesis_slot(key) as may_compile,
-              _rendering_slot(req.js)):
+              _synthesis_slot(key) as may_compile):
             return _extract_now(req, key, schema, may_compile)
 
     def _extract_now(req: ExtractRequest, key: ApiKey, schema: Schema,
@@ -640,6 +638,12 @@ def create_app(store: Store | None = None,
             # instead.
             log.info("gone: %s -> %s", e.requested, e.final)
             raise HTTPException(status.HTTP_410_GONE, _gone_detail(e)) from e
+        except NoBrowserSlot as e:
+            # Raised from inside the pipeline now, since that is where the
+            # slot is taken. Nothing has been charged and nothing is
+            # remembered as a failure: the page is fine, the machine is busy.
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e),
+                                headers={"Retry-After": "10"}) from e
         except ProviderError as e:
             # Theirs, and probably over in a minute. Nothing is charged,
             # nothing is remembered as a failure, and the caller is told to
@@ -728,25 +732,6 @@ def create_app(store: Store | None = None,
         finally:
             held.__exit__(None, None, None)
 
-    @contextmanager
-    def _rendering_slot(js: bool):
-        """Hold one of the process's browser slots, or say come back.
-
-        Nothing has been charged at this point, and nothing will be: a 503
-        here costs the caller nothing but the wait. Queuing instead would
-        hold a connection open behind a browser, which is how a slow client
-        turns into a timeout for everybody.
-        """
-        if not js:
-            yield
-            return
-        try:
-            with app.state.browsers.slot():
-                yield
-        except NoBrowserSlot as e:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e),
-                                headers={"Retry-After": "10"}) from e
-
     @app.post("/v1/crawl", status_code=status.HTTP_202_ACCEPTED)
     def crawl_endpoint(req: CrawlRequest,
                        key: ApiKey = Depends(require_key)) -> dict[str, Any]:
@@ -769,15 +754,17 @@ def create_app(store: Store | None = None,
             # A job waits for its turn instead of being refused: it is already
             # asynchronous, and the caller is polling rather than waiting on
             # an open connection.
-            with (_synthesis_slot(key) as may_compile,
-                  app.state.browsers.slot(wait=CRAWL_SLOT_WAIT_SECONDS)
-                  if req.js else _nothing()):
+            # The long wait is passed down to each render rather than
+            # held around the whole job: one semaphore of one, held
+            # outside, would block the very renders it was taken for.
+            with _synthesis_slot(key) as may_compile:
                 return _crawl_now(req, key, schema, max_items, mode, may_compile)
 
 
         def _crawl_now(req, key, schema, max_items, mode, may_compile=True):
             sw, meter = metered_scrapewright(js=req.js,
-                                             max_scrolls=req.scroll)
+                                             max_scrolls=req.scroll,
+                                             slot_wait=CRAWL_SLOT_WAIT_SECONDS)
             # Looked up by name, not by building a dict of bound methods:
             # that evaluates all three, and a pipeline double that implements
             # only the one under test dies on the other two.

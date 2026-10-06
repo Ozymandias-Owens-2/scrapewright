@@ -44,6 +44,31 @@ class _CountingFetcher:
 
 
 @dataclass
+class _Slotted:
+    """Holds a browser slot for exactly as long as the render takes.
+
+    The ceiling used to be taken around the whole request, which meant a
+    `js=true` extract held the only slot through the static fetch and
+    through a model call that runs ten to sixty seconds. A spreadsheet
+    sending two rows at once -- both of them plain Shopify pages that
+    never touch a browser -- had the second wait twenty seconds and then
+    get "all 1 browser slots are busy". Half a live run failed that way.
+
+    The slot belongs around the browser, not around the request.
+    """
+
+    inner: object
+    wait: float | None = None
+
+    def fetch(self, url: str):
+        with get_pool().slot(wait=self.wait):
+            return self.inner.fetch(url)
+
+    def close(self) -> None:
+        pass            # the browser belongs to the process, as below
+
+
+@dataclass
 class _CountingLlm:
     inner: object
     meter: Meter
@@ -68,7 +93,7 @@ class _CountingLlm:
 
 
 def metered_scrapewright(*, js: bool = False, meter: Meter | None = None,
-                         max_scrolls: int = 0,
+                         max_scrolls: int = 0, slot_wait: float | None = None,
                          **kwargs) -> tuple[Scrapewright, Meter]:
     """Build a pipeline whose consumption is counted.
 
@@ -79,15 +104,20 @@ def metered_scrapewright(*, js: bool = False, meter: Meter | None = None,
     The browser itself comes from the process pool rather than being started
     here. Starting one per request is what let eight concurrent calls start
     eight Chromiums on a one-gigabyte machine and get the whole service OOM
-    killed. The caller is expected to be holding a slot from that same pool;
-    see :mod:`scrapewright.service.browser_pool`.
+    killed. Each render takes a slot from that same pool for its own
+    duration -- see :class:`_Slotted`; ``slot_wait`` is how long it may
+    wait for one, and a crawl passes a long time because it is a background
+    job nobody is holding a connection open for.
     """
     meter = meter or Meter()
     fetcher = _CountingFetcher(StaticFetcher(), meter, "pages")
     browser = None
     if js:
         shared = get_pool().fetcher(max_scrolls=max_scrolls)
-        browser = _CountingFetcher(shared, meter, "renders")
+        # Slot outside, counter inside: a render that never got a slot is
+        # not a render, and must not appear on anybody's bill.
+        browser = _Slotted(_CountingFetcher(shared, meter, "renders"),
+                           slot_wait)
 
     sw = Scrapewright(fetcher=fetcher, browser=browser, js=js, **kwargs)
     sw.llm = _CountingLlm(sw.llm, meter)
