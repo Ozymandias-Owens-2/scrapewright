@@ -28,13 +28,16 @@ browser and the chain runs again; a recipe learned that way is tagged
 
 from __future__ import annotations
 
+import os
+import threading
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
 
-from .cache import RecipeCache
+from .cache import RecipeCache, cache_key
 from .crawl import Frontier
 from .detect import detect
 from .extract.jsonld import JsonLdExtractor
@@ -75,6 +78,54 @@ DEFAULT_LIKE_CAP = 200
 # Room to keep discovering past the cap, so the queue does not starve on a
 # page whose neighbours are mostly ones we have already seen.
 LIKE_FRONTIER_SLACK = 3
+
+
+
+# ── one compile per site at a time ──────────────────────────────────────────
+# Two rows of a spreadsheet, sent together, are usually two pages of the
+# same shop -- and if that shop is new, both of them paid a model to read
+# it. Four shops in one live run compiled twice, which is 300 credits each
+# time for an answer the other request was already buying.
+#
+# Keyed exactly like the recipe cache, so the lock covers precisely what a
+# compile would write. Different sites never wait for each other.
+def _compile_wait() -> float:
+    try:
+        return max(0.0, float(os.environ.get("COMPILE_WAIT_SECONDS", "60")))
+    except ValueError:
+        return 60.0
+
+
+class CompileBusy(RuntimeError):
+    """Another request is already teaching this site, and waiting did not help."""
+
+
+# ponytail: one lock per site, never collected. Bounded by the number of
+# sites a process has seen, which is small; a cache with eviction if that
+# ever stops being true.
+_gates: dict[str, threading.Lock] = {}
+_gates_lock = threading.Lock()
+
+
+@contextmanager
+def compile_gate(key: str, wait: float | None = None):
+    """Hold the right to compile this site, or raise :class:`CompileBusy`.
+
+    The waiter does not ask for the other request's answer -- it asks for
+    its turn. Having got it, it looks in the cache first: the site it was
+    about to pay for is usually sitting there, learned a second ago by
+    whoever it was waiting for.
+    """
+    with _gates_lock:
+        lock = _gates.setdefault(key, threading.Lock())
+    if not lock.acquire(timeout=_compile_wait() if wait is None else wait):
+        raise CompileBusy(
+            f"another request is already learning {key}; it takes a few "
+            f"seconds and then this page is free to read. Try again shortly.")
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 class _RecordingFetcher:
@@ -412,20 +463,34 @@ class Scrapewright:
         if not allow_llm:
             return jsonld  # best effort (may be None or partial)
 
-        new_recipe = self._synthesize(html, url, schema)
-        if new_recipe is None:
-            return jsonld
-        # Check the model's homework against the page it was given, before
-        # this goes in the cache and is replayed on every other page.
-        new_recipe = prune_unusable(new_recipe, schema, html, url)
-        new_recipe.needs_js = js_used
-        # Added to what the site already taught us, not swapped for it. A
-        # shop that lays its products out two ways -- fietshokje.nl wraps
-        # some prices in `.prijs` and others not -- otherwise recompiles on
-        # every variant, each page overwriting the last, until the daily
-        # ceiling stops it and the next product reads as nothing.
-        self.cache.put(url, _merged_recipe(self.cache.get(url, schema.name),
-                                           new_recipe), schema.name)
+        with compile_gate(cache_key(url, schema.name)):
+            # Whoever we queued behind has just taught this site. Their
+            # recipe is written against a different page of it, which is
+            # the normal case and usually works on ours too -- and when it
+            # does, this request has cost nothing.
+            learned = self.cache.get(url, schema.name)
+            if learned is not None:
+                already = SelectorExtractor(learned, schema).extract_record(
+                    html, url)
+                if already is not None and schema.is_satisfied_by(already.data):
+                    return already
+
+            new_recipe = self._synthesize(html, url, schema)
+            if new_recipe is None:
+                return jsonld
+            # Check the model's homework against the page it was given,
+            # before this goes in the cache and is replayed on every other
+            # page.
+            new_recipe = prune_unusable(new_recipe, schema, html, url)
+            new_recipe.needs_js = js_used
+            # Added to what the site already taught us, not swapped for it.
+            # A shop that lays its products out two ways -- fietshokje.nl
+            # wraps some prices in `.prijs` and others not -- otherwise
+            # recompiles on every variant, each page overwriting the last,
+            # until the daily ceiling stops it and the next product reads
+            # as nothing.
+            self.cache.put(url, _merged_recipe(self.cache.get(url, schema.name),
+                                               new_recipe), schema.name)
         fresh = SelectorExtractor(new_recipe, schema).extract_record(html, url)
         return fresh or jsonld
 

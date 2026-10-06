@@ -40,7 +40,7 @@ from ..fetch import PageGone
 from ..robots import RobotsDisallowed
 from ..robots import check as check_robots
 from ..safeurl import UnsafeUrl, check_syntax
-from ..pipeline import Scrapewright
+from ..pipeline import CompileBusy, Scrapewright
 from ..export import write_any
 from ..models import Record
 from ..schema import PRODUCT_SCHEMA, Schema
@@ -638,6 +638,12 @@ def create_app(store: Store | None = None,
             # instead.
             log.info("gone: %s -> %s", e.requested, e.final)
             raise HTTPException(status.HTTP_410_GONE, _gone_detail(e)) from e
+        except CompileBusy as e:
+            # Somebody else is paying for this site right now. Waiting any
+            # longer holds a connection open; coming back in a moment gets
+            # the recipe for free.
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e),
+                                headers={"Retry-After": "15"}) from e
         except NoBrowserSlot as e:
             # Raised from inside the pipeline now, since that is where the
             # slot is taken. Nothing has been charged and nothing is
