@@ -123,9 +123,12 @@ def clean_money(text: str) -> tuple[str | None, str | None]:
     ``note`` carries a tax marker when the page attached one, because
     "€ 31.850 excl. BTW" and "€ 31.850" are different prices.
 
-    Text with no number in it comes back untouched: that is a selector
-    pointing at the wrong element, and swallowing it would hide the
-    evidence that normally gets the selector thrown away.
+    Text with no number in it is not a price and is never returned as
+    one. A sold camper's page says "Verkocht" where the price used to be,
+    and a spreadsheet watching a number should get an empty cell and the
+    word beside it, not the word in the number's place. It comes back as
+    the note, which is also what lets a selector pointing at the wrong
+    element still be recognised and thrown away.
     """
     raw = str(text)
     note_match = _PRICE_NOTE.search(raw)
@@ -145,7 +148,7 @@ def clean_money(text: str) -> tuple[str | None, str | None]:
             best = match
             break
     if best is None:
-        return raw.strip() or None, note
+        return None, note or raw.strip() or None
 
     value = " ".join("".join(part for part in best.groups() if part).split())
     amount = parse_price(value)

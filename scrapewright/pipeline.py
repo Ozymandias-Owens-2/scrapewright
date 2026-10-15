@@ -42,7 +42,8 @@ from .crawl import Frontier
 from .detect import detect
 from .extract.jsonld import JsonLdExtractor
 from .extract.llm import LlmExtractor
-from .extract.selectors import SelectorExtractor, prune_unusable
+from .extract.selectors import (SelectorExtractor, prune_unusable,
+                                widen_sale_selectors)
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
 from .fetch import (BrowserFetcher, PageGone, StaticFetcher,
@@ -482,6 +483,10 @@ class Scrapewright:
             # before this goes in the cache and is replayed on every other
             # page.
             new_recipe = prune_unusable(new_recipe, schema, html, url)
+            # A price selector written on a discounted page names the
+            # discount, and then matches nothing on the days the product is
+            # not on offer. Keep it, and keep a wider one behind it.
+            new_recipe = widen_sale_selectors(new_recipe, schema)
             new_recipe.needs_js = js_used
             # Added to what the site already taught us, not swapped for it.
             # A shop that lays its products out two ways -- fietshokje.nl

@@ -34,9 +34,16 @@ def test_a_bare_number_needs_no_sibling():
     assert "rating_text" not in v
 
 
-def test_text_that_holds_no_number_is_left_alone():
+def test_words_where_a_price_should_be_are_not_a_price():
+    """This used to return the words in the price column.
+
+    A sold camper's page says "Verkocht" where the price was, and a sheet
+    watching a number got the word in the number's place. The words are
+    worth keeping -- they say why there is no price -- but beside it.
+    """
     v = _extract(["price:number"], {"price": ".bad"})
-    assert v["price"] == "call us"
+    assert "price" not in v
+    assert v["price_note"] == "call us"
     assert "price_text" not in v
 
 

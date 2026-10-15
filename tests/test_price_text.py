@@ -81,10 +81,13 @@ def test_a_price_followed_by_a_year_stays_a_price():
     assert clean_money("€ 5 950 2026")[0] == "€ 5 950"
 
 
-def test_text_with_no_number_comes_back_whole():
-    """It is a selector pointing at the wrong element, and that is what gets
-    the selector thrown away. Hiding it hides the evidence."""
-    assert clean_money("Op aanvraag") == ("Op aanvraag", None)
+def test_words_instead_of_a_number_become_the_note():
+    """Never the value: "Verkocht" in a price column is a wrong answer.
+
+    Kept as the note, which is both what the reader wants to see beside
+    the empty cell and the evidence that gets a bad selector thrown away.
+    """
+    assert clean_money("Op aanvraag") == (None, "Op aanvraag")
 
 
 # ── 3. the zero placeholder ──────────────────────────────────────────────────
