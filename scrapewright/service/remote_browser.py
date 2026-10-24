@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import requests
 
@@ -49,7 +50,7 @@ def fallback_count() -> int:
     return _fallbacks
 
 
-def probe(timeout: float = 5.0) -> str:
+def probe(timeout: float = 5.0, attempts: int = 4, gap: float = 2.0) -> str:
     """Is the configured renderer answering? "" when none is configured.
 
     Called once at startup. Two deploys of the render service in a row
@@ -57,15 +58,31 @@ def probe(timeout: float = 5.0) -> str:
     -- and both times the API carried on rendering locally and saying
     nothing. An isolated browser that silently is not isolated is worse
     than no isolation, because it is believed.
+
+    Asked more than once, because a single ask was worse than useless.
+    This runs while the process is starting, before its own private
+    networking is up, and the first attempt came back "connection
+    refused" -- so health reported the browser as missing for a week
+    while every render was going to it correctly. A false alarm on this
+    is not a cautious error: it is the one number anybody would check to
+    decide whether the isolation is real.
     """
     base = os.environ.get(RENDER_URL_ENV)
     if not base:
         return ""
-    try:
-        response = requests.get(f"{base.rstrip('/')}/health", timeout=timeout)
-    except requests.RequestException as e:
-        return f"unreachable: {e}"
-    return "ok" if response.status_code == 200 else f"answered {response.status_code}"
+    last = ""
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(gap)
+        try:
+            response = requests.get(f"{base.rstrip('/')}/health", timeout=timeout)
+        except requests.RequestException as e:
+            last = f"unreachable: {e}"
+            continue
+        if response.status_code == 200:
+            return "ok"
+        last = f"answered {response.status_code}"
+    return last
 
 
 class RemoteBrowserFetcher:

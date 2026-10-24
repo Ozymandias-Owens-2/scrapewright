@@ -247,3 +247,43 @@ def test_probe_reports_an_unreachable_renderer(monkeypatch):
     monkeypatch.setattr(rb.requests, "get", lambda *a, **kw:
                         (_ for _ in ()).throw(rb.requests.RequestException("no route")))
     assert rb.probe().startswith("unreachable")
+
+
+def test_the_probe_asks_again_before_crying_wolf(monkeypatch):
+    """One ask was worse than useless.
+
+    It runs while the process is still starting, before private
+    networking is up, so the first attempt came back "connection refused"
+    and health reported the browser as missing for a week -- while every
+    render was in fact going to it. A false alarm on this is not a
+    cautious error: it is the number anybody would check to decide
+    whether the isolation is real.
+    """
+    from scrapewright.service import remote_browser as rb
+
+    monkeypatch.setenv(rb.RENDER_URL_ENV, "http://renderer:8080")
+    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
+    calls = []
+
+    class _Ok:
+        status_code = 200
+
+    def flaky(url, timeout=None):
+        calls.append(url)
+        if len(calls) < 3:
+            raise rb.requests.RequestException("[Errno 111] Connection refused")
+        return _Ok()
+
+    monkeypatch.setattr(rb.requests, "get", flaky)
+    assert rb.probe() == "ok"
+    assert len(calls) == 3
+
+
+def test_a_renderer_that_is_really_down_still_says_so(monkeypatch):
+    from scrapewright.service import remote_browser as rb
+
+    monkeypatch.setenv(rb.RENDER_URL_ENV, "http://renderer:8080")
+    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
+    monkeypatch.setattr(rb.requests, "get", lambda *a, **kw:
+                        (_ for _ in ()).throw(rb.requests.RequestException("no route")))
+    assert rb.probe(attempts=2).startswith("unreachable")
