@@ -438,6 +438,12 @@ class Scrapewright:
                        allow_llm: bool, js_used: bool) -> Record | None:
         """cached recipe → JSON-LD → LLM synthesis, against one HTML document."""
         if recipe is not None:
+            # Every recipe in the cache was written before the widening
+            # below existed, and one that names a discount answers nothing
+            # on the days the product is not on offer. Widening on the way
+            # in heals them without buying a compile; it only ever adds an
+            # alternate behind the selector the model wrote.
+            recipe = widen_sale_selectors(recipe, schema)
             record = SelectorExtractor(recipe, schema).extract_record(html, url)
             # A thin recipe must not be accepted just because the one required
             # field is in it: that is how a car page kept returning its title

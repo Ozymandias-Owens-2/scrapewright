@@ -111,6 +111,18 @@ _PRICE_NOTE = re.compile(
 
 PRICE_ON_REQUEST = "price on request"
 
+# A label glued to its value. Whitespace between block elements is lost when
+# an element's text is read, so a page that prints "Estado:" above "1
+# disponibles" returns "Estado:1 disponibles". A colon with a space after it
+# was typed by a person -- "Nike: Air Max" is a name, not a caption -- so only
+# the glued kind is taken off, and never the "//" of a URL.
+_GLUED_LABEL = re.compile(r"^\s*[^:\d]{1,20}:(?=[^\s/])")
+
+
+def strip_label(text: str) -> str:
+    """Take the page's own caption off the front of a value."""
+    return _GLUED_LABEL.sub("", str(text), count=1).strip()
+
 
 def clean_money(text: str) -> tuple[str | None, str | None]:
     """Separate a price from the words around it. Returns ``(value, note)``.

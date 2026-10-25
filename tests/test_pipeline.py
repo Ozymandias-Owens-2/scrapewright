@@ -135,3 +135,48 @@ def test_rendering_reuses_a_recipe_the_static_hop_just_bought(tmp_path):
     assert llm.calls == 1
     assert record is not None
     assert record.data["title"] == "A Real Product"
+
+
+# ── a recipe already in the cache heals itself ──────────────────────────────
+ESCALADA_NOT_ON_OFFER = """
+<h1>Mammut Wall Alpine Belay</h1>
+<span class="web-product-price price">
+  <span class="amount"><bdi>25,00&euro;</bdi></span></span>
+<p class="stock in-stock">4 disponibles</p>
+<section class="related">
+  <span class="price"><del><span class="amount">26,00&euro;</span></del>
+  <ins><span class="amount">20,80&euro;</span></ins></span>
+</section>
+"""
+
+
+def test_a_cached_sale_recipe_widens_itself_on_the_way_out(tmp_path):
+    """escaladaymas.com, the second time.
+
+    The recipe names the ``<ins>`` wrapper, so every product *not* on offer
+    read as "nothing found". Widening it at compile time fixed the recipes
+    compiled afterwards and nothing else -- and a recipe is cached per
+    domain for days, so the shop stayed broken. Doing it on the way out of
+    the cache heals what is already there, for free.
+    """
+    from decimal import Decimal
+
+    from scrapewright.schema import Schema
+
+    schema = Schema.from_names(["price:number", "in stock"])
+    url = "https://escaladaymas.example.com/mammut-wall-alpine-belay/"
+    cache = RecipeCache(tmp_path / "r.json")
+    cache.put(url, SelectorRecipe(
+        fields={"price": ".web-product-price ins .amount",
+                "in stock": "p.stock"},
+        schema_name=schema.name), schema.name)
+
+    llm = _FakeLLM(None)
+    sw = Scrapewright(cache=cache, llm=llm,
+                      session=_FakeSession(ESCALADA_NOT_ON_OFFER))
+    record = sw.extract(url, schema, allow_llm=False)
+
+    assert record is not None, "the page says 25,00 euro in plain sight"
+    assert record.data["price"] == Decimal("25.00")
+    assert record.data["in stock"] == "4 disponibles"
+    assert llm.calls == 0            # healed without buying a compile

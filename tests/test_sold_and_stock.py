@@ -165,3 +165,31 @@ def test_widening_leaves_an_ordinary_selector_alone():
     recipe = SelectorRecipe(fields={"price": "p.price .amount"},
                             schema_name=schema.name)
     assert widen_sale_selectors(recipe, schema).alternates == {}
+
+
+# ── 4. the shop's caption is not the value ──────────────────────────────────
+def test_a_label_glued_to_its_value_comes_off():
+    """gharosport.net prints "Estado:" above "1 disponibles" and
+    mobiledrome.nl "Op voorraad:" above "Ja". The whitespace between two
+    block elements is lost when the text is read, so both arrive as one
+    word, and the caption is the shop's name for a column the reader has
+    already named themselves."""
+    v = _values('<p class="s">Estado:1 disponibles</p>',
+                ["in stock"], {"in stock": ".s"})
+    assert v["in stock"] == "1 disponibles"
+    v = _values('<p class="s">Op voorraad:Ja</p>',
+                ["in stock"], {"in stock": ".s"})
+    assert v["in stock"] == "Ja"
+
+
+def test_a_colon_somebody_typed_is_left_alone():
+    """"Nike: Air Max" is a name. A space after the colon is the whole
+    difference between a caption and a sentence."""
+    v = _values('<h1>Nike: Air Max 90</h1>', ["title"], {"title": "h1"})
+    assert v["title"] == "Nike: Air Max 90"
+
+
+def test_a_link_is_not_a_label():
+    v = _values('<a class="l" href="https://shop.test/x">go</a>',
+                ["link:url"], {"link": ".l"}, modes={"link": "attr:href"})
+    assert v["link"] == "https://shop.test/x"

@@ -113,9 +113,15 @@ class Schema:
         writes "Onze prijs:€ 54.900" or "€ 31.850,-excl. BTW" as one run of
         text, and the label is not part of the price. A tax marker is kept
         as ``<field>_note`` -- it changes what the number means.
+
+        Every other field loses the same caption: a page that prints
+        "Estado:" above "1 disponibles" returns the two glued together, and
+        the caption is the shop's name for a column the reader has already
+        named themselves.
         """
         # A money parser reads any number.
-        from .models import clean_money, is_money_field, parse_price
+        from .models import (clean_money, is_money_field, parse_price,
+                             strip_label)
 
         out = dict(values)
         for f in self.fields:
@@ -132,6 +138,9 @@ class Schema:
                     out.pop(f.name, None)
                     out.pop(f"{f.name}_text", None)
                     continue
+                out[f.name] = raw
+            else:
+                raw = strip_label(raw)
                 out[f.name] = raw
             if f.kind != "number":
                 continue
