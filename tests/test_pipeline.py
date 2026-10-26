@@ -180,3 +180,47 @@ def test_a_cached_sale_recipe_widens_itself_on_the_way_out(tmp_path):
     assert record.data["price"] == Decimal("25.00")
     assert record.data["in stock"] == "4 disponibles"
     assert llm.calls == 0            # healed without buying a compile
+
+
+def test_a_page_the_model_cannot_read_is_paid_for_once(tmp_path):
+    """The other half of the same bill.
+
+    The guard above covers the page the model gets right. When it gets the
+    page *wrong*, the rendered attempt returned nothing, the caller fell
+    through to the static copy and bought a second compilation of the same
+    site -- 610 credits for one spreadsheet row that still came back empty.
+    A rendered page is the best likeness of a site there is; a worse copy
+    does not deserve a second go at the model's expense.
+    """
+    from scrapewright.cache import RecipeCache
+    from scrapewright.pipeline import Scrapewright
+    from scrapewright.schema import PRODUCT_SCHEMA
+
+    class CountingLlm:
+        calls = 0
+
+        def synthesize(self, html, url, schema=None):
+            CountingLlm.calls += 1
+            return SelectorRecipe(origin=url, schema_name=PRODUCT_SCHEMA.name,
+                                  fields={"title": "h1", "price": ".nope"})
+
+    class StaticFetcher:
+        kind = "static"
+        def fetch(self, url): return "<h1>Variable product</h1>"
+        def close(self): pass
+
+    class Browser:
+        kind = "browser"
+        def fetch(self, url): return "<h1>Variable product</h1><p>from</p>"
+        def close(self): pass
+
+    sw = Scrapewright(fetcher=StaticFetcher(), browser=Browser(), js=True,
+                      llm=CountingLlm(),
+                      cache=RecipeCache(tmp_path / "recipes.json"))
+    sw.extract("https://shop.test/variable")
+
+    assert CountingLlm.calls == 1
+    # What it did learn is kept -- a recipe that answers the title and not
+    # the price is half an answer, and the daily ceiling is what stops it
+    # being rewritten on every page from here.
+    assert sw.cache.get("https://shop.test/variable", PRODUCT_SCHEMA.name)

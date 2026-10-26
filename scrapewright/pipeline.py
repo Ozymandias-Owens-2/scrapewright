@@ -63,7 +63,7 @@ DEFAULT_MAX_SYNTH_PER_RUN = 3
 ONE_DAY_SECONDS = 24 * 60 * 60
 # Compilations allowed per site and schema in a day. Enough to heal a
 # redesign, not enough for a half-readable site to bill a crawl to death.
-MAX_COMPILES_PER_DAY = 3
+MAX_COMPILES_PER_DAY = 2
 
 
 def _rows_cache_name(schema: Schema) -> str:
@@ -306,11 +306,17 @@ class Scrapewright:
         # -- 639 credits where 305 was the honest price -- because the static
         # copy is a worse likeness of what the visitor sees, and the model
         # picked worse selectors from it.
+        compiled = False
         if recipe is None and allow_llm and self._can_js() and html is not None:
-            taught = self._teach_on_rendered(url, schema, html)
+            taught, compiled = self._teach_on_rendered(url, schema, html)
             if taught is not None:
                 return taught
             recipe = self.cache.get(url, schema.name)
+            # A rendered page is the best likeness of this site there is. If
+            # the model could not write a working recipe from that, it will
+            # not do better against the static copy -- it will only charge
+            # again. One request, one compilation.
+            allow_llm = allow_llm and not compiled
 
         # An empty client-side shell can't be extracted from and isn't worth an
         # LLM call — go straight to the browser when one is available.
@@ -355,7 +361,8 @@ class Scrapewright:
         recipe = self.cache.get(url, schema.name) or recipe
         rendered_record = self._extract_chain(rendered, url, schema, recipe,
                                               allow_llm, True)
-        if (rendered_record is None and record is None and allow_llm
+        if (rendered_record is None and record is None
+                and (allow_llm or compiled)
                 and self.cache.get(url, schema.name) is None):
             # Everything was tried, including the model, and the page still
             # reads as nothing. Write that down: asked again tomorrow, this
@@ -373,9 +380,13 @@ class Scrapewright:
                    default=None)
 
     def _teach_on_rendered(self, url: str, schema: Schema,
-                           static_html: str) -> Record | None:
+                           static_html: str) -> tuple[Record | None, bool]:
         """Compile this site from the rendered page, once, and see whether the
         result also works without a browser.
+
+        Returns the record and whether a compilation was actually paid for,
+        which the caller needs to tell "the browser never answered, try
+        something else" apart from "the model has had its one go".
 
         The second half matters as much as the first: a recipe learned from a
         rendered page is marked ``needs_js``, and that marking renders every
@@ -385,10 +396,10 @@ class Scrapewright:
         """
         rendered = self._browser_fetch(url)
         if rendered is None:
-            return None
+            return None, False
         record = self._extract_chain(rendered, url, schema, None, True, True)
         if record is None or not schema.is_satisfied_by(record.data):
-            return None
+            return None, True
 
         recipe = self.cache.get(url, schema.name)
         if recipe is not None and recipe.needs_js:
@@ -397,7 +408,7 @@ class Scrapewright:
             if on_static is not None and schema.is_satisfied_by(on_static.data):
                 recipe.needs_js = False
                 self.cache.put(url, recipe, schema.name)
-        return record
+        return record, True
 
     def _compiled_today(self, url: str, schema: Schema) -> bool:
         """Has this site used up its compilations for the day?
@@ -405,9 +416,13 @@ class Scrapewright:
         A ceiling, not a ban. A recipe can be written, found wanting and
         rewritten, so without one a loop over a thousand pages of a
         half-readable site pays a thousand times. But it cannot be one per
-        day either: a site that redesigns overnight has to be allowed to
-        heal, and healing is a compilation. Three is enough for a repair and
-        far short of a runaway.
+        day either, for two reasons: a site that redesigns overnight has to
+        be allowed to heal, and healing is a compilation; and recipes are
+        kept per domain, so a shop that lays two products out differently
+        needs a second compilation to learn the second layout -- eight of
+        the thirty-two shops in one live spreadsheet have exactly that
+        shape. Two covers a repair and a second layout, and caps a stubborn
+        domain at about forty cents a day instead of a dollar forty.
         """
         return self.cache.compiles_today(url, schema.name) >= MAX_COMPILES_PER_DAY
 

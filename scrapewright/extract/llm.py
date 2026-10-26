@@ -146,10 +146,35 @@ HTML:
 ```"""
 
 
-# Attributes that carry huge values (responsive image sets, inline styles,
-# data blobs) and contribute nothing to choosing a selector.
-_BULKY_ATTRS = ("srcset", "data-srcset", "sizes", "style", "content")
+# Tags that never hold a product's own data. ``nav`` was 110,000 characters
+# of one van listing -- more than half of everything the model was being
+# charged to read.
+_NOISE_TAGS = ("script", "style", "svg", "noscript", "template", "iframe",
+               "nav", "footer", "aside", "picture", "source", "link")
+
+# Blocks named for what they are: the "you may also like" strip, the cookie
+# banner, the breadcrumb. Dropping them is worth more than the characters.
+# A related-products carousel is a dozen complete products with prices, laid
+# out in the shop's own markup, and a model asked where the price lives can
+# answer with one of theirs -- which then replays, correctly, on every page,
+# returning a number that belongs to a different item.
+_ASIDE = re.compile(
+    r"related|recommend|upsell|cross[-_]?sell|also[-_](?:bought|viewed|like)"
+    r"|similar[-_]product|breadcrumb|cookie|cmplz|newsletter|subscribe"
+    r"|(?:^|[-_ ])(?:menu|megamenu)(?:[-_ ]|$)", re.IGNORECASE)
+
+# Attributes that carry huge values and say nothing about where a field is.
+# Dropped outright rather than truncated: ninety-eight truncated srcsets is
+# still twelve thousand characters of nothing.
+_DROP_ATTRS = ("srcset", "data-srcset", "sizes", "style", "title",
+               "loading", "decoding", "width", "height", "target", "rel",
+               "tabindex", "aria-describedby", "aria-labelledby")
+# ``content`` is the value itself on a meta tag, so it is kept, just capped.
+_BULKY_ATTRS = ("content",)
 _ATTR_VALUE_CAP = 120
+# An element with no text and no image cannot hold a field. Icon wrappers,
+# spacers and empty grid cells are 64,000 characters of one page.
+_KEEP_EMPTY = ("img", "input", "meta", "title")
 
 # Whole-document cap. Generous on purpose: synthesis happens once per site, and
 # a browser-rendered page can easily run past 90k characters — the field you
@@ -161,22 +186,42 @@ DEFAULT_HTML_CAP = 200_000
 def reduce_html(html: str, cap: int = DEFAULT_HTML_CAP) -> str:
     """Strip noise so a product page reaches the model cheaply and intact.
 
-    Removes scripts/styles/SVG, drops comments, and truncates bulky attribute
-    values — keeping the structural signal (tags, ids, classes) that selector
-    synthesis actually depends on.
+    Removes scripts, styles, navigation and the blocks a shop names after
+    what they are -- related products, cookie banners, breadcrumbs -- drops
+    comments and empty wrappers, and strips or caps attributes that carry no
+    structural signal. What is left is tags, ids, classes and the page's own
+    words, which is all selector synthesis depends on.
+
+    Measured on four live pages, this is 46% of what the old version sent.
+    One van listing reduced to 827KB of markup around 24KB of text; its
+    navigation alone was 110KB, and the page was being truncated at the cap,
+    so the model could be paying to read a menu instead of reading the price.
     """
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "svg", "noscript", "template"]):
+    for tag in soup(list(_NOISE_TAGS)):
         tag.decompose()
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
         comment.extract()
     for tag in soup.find_all(True):
+        if tag.parent is None:
+            continue                       # already gone with an ancestor
+        mark = " ".join(tag.get("class") or []) + " " + (tag.get("id") or "")
+        if mark.strip() and _ASIDE.search(mark):
+            tag.decompose()
+    for tag in soup.find_all(True):
         for attr in list(tag.attrs):
             value = tag.attrs[attr]
-            if not isinstance(value, str):
-                continue
-            if attr in _BULKY_ATTRS or len(value) > _ATTR_VALUE_CAP:
+            if attr in _DROP_ATTRS:
+                del tag.attrs[attr]
+            elif isinstance(value, str) and (
+                    attr in _BULKY_ATTRS or len(value) > _ATTR_VALUE_CAP):
                 tag.attrs[attr] = value[:_ATTR_VALUE_CAP]
+    for tag in reversed(soup.find_all(True)):   # innermost first
+        if tag.name in _KEEP_EMPTY or tag.get_text(strip=True):
+            continue
+        if tag.find(_KEEP_EMPTY):
+            continue
+        tag.decompose()
     text = re.sub(r"\s+", " ", str(soup))
     return text[:cap]
 
