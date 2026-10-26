@@ -193,3 +193,26 @@ def test_a_link_is_not_a_label():
     v = _values('<a class="l" href="https://shop.test/x">go</a>',
                 ["link:url"], {"link": ".l"}, modes={"link": "attr:href"})
     assert v["link"] == "https://shop.test/x"
+
+
+def test_a_paragraph_is_not_an_answer_to_is_this_in_stock():
+    """A cheap model with nothing better to point at offers the nearest
+    block of prose: one answered a van's availability with its WLTP
+    consumption figures, another with a paragraph of the description.
+    Availability is said in a few words or not at all."""
+    schema = Schema.from_names(["title", "in stock"])
+    recipe = SelectorRecipe(fields={"title": "h1", "in stock": ".spec"},
+                            schema_name=schema.name)
+    html = ('<h1>Van</h1><p class="spec">Gemiddeld elektriciteitsverbruik '
+            '(WLTP): 20,3 kWh/100km. CO2-uitstoot (WLTP): 0 g/km. EU '
+            'verantwoordelijke: Mercedes-Benz Nederland B.V.</p>')
+    assert "in stock" not in prune_unusable(recipe, schema, html, URL).fields
+
+
+def test_a_short_answer_is_still_an_answer():
+    schema = Schema.from_names(["title", "in stock"])
+    recipe = SelectorRecipe(fields={"title": "h1", "in stock": ".s"},
+                            schema_name=schema.name)
+    for said in ("En stock", "26 vorrätig", "Nog 3 op voorraad, morgen in huis"):
+        html = f'<h1>A</h1><p class="s">{said}</p>'
+        assert prune_unusable(recipe, schema, html, URL).fields["in stock"] == ".s", said

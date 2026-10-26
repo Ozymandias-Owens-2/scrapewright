@@ -216,6 +216,11 @@ _STOCK_NAME = re.compile(
     re.IGNORECASE)
 
 
+# The longest thing a shop says to mean "you can buy this". Measured
+# against the real ones: "Nog 3 op voorraad, morgen in huis" is 33.
+MAX_STOCK_TEXT = 80
+
+
 def is_stock_field(field) -> bool:
     return bool(_STOCK_NAME.search(field.name))
 
@@ -307,10 +312,16 @@ def prune_unusable(recipe, schema: Schema, html: str, url: str):
             continue
 
         # A selector that answers the cart button was asked where
-        # availability lives and pointed at the thing you press.
+        # availability lives and pointed at the thing you press. And
+        # availability is said in a few words -- "In stock", "26 vorrätig",
+        # "Agotado". A model with nothing better to point at will offer the
+        # specification table or the whole description: one answered a van's
+        # availability with its WLTP consumption figures. Whatever that is,
+        # it is not an answer to "is this in stock".
         if is_stock_field(field):
             matches = soup.select(recipe.fields[field.name])
-            if matches and pick_stock_element(matches) is None:
+            said = str(values.get(field.name) or "")
+            if (matches and pick_stock_element(matches) is None) or                     len(said) > MAX_STOCK_TEXT:
                 recipe.fields.pop(field.name, None)
                 recipe.modes.pop(field.name, None)
             continue
