@@ -103,10 +103,65 @@ def test_compilations_are_capped_for_the_day(tmp_path):
 
 def test_the_count_is_per_site_and_schema(tmp_path):
     cache = RecipeCache(tmp_path / "r.json")
-    cache.put(URL, SelectorRecipe(fields={"price": ".p"}), SCHEMA.name)
+    cache.note_compile(URL, SCHEMA.name)
     assert cache.compiles_today(URL, SCHEMA.name) == 1
     assert cache.compiles_today("https://elsewhere.test/x", SCHEMA.name) == 0
     assert cache.compiles_today(URL, "another-schema") == 0
+
+
+def test_a_compilation_that_produced_nothing_still_counts(tmp_path):
+    """The ceiling has to bind on the pages it exists for.
+
+    Counting compilations on the recipe they wrote meant the ones that
+    wrote no recipe went uncounted, so an unreadable page was never capped
+    -- it bought a fresh synthesis on every refresh, for ever.
+    """
+    cache = RecipeCache(tmp_path / "r.json")
+    llm = _Hopeless()
+    sw = Scrapewright(cache=cache, llm=llm, fetcher=_Fetcher())
+    sw.extract(URL, SCHEMA)
+
+    assert llm.calls >= 1
+    assert cache.compiles_today(URL, SCHEMA.name) == llm.calls
+    assert cache.get(URL, SCHEMA.name) is None   # nothing to hang a count on
+
+
+def test_one_readable_page_does_not_absolve_the_rest_of_the_site(tmp_path):
+    """Two products of one shop, one readable and one not.
+
+    The note used to be filed by domain, so compiling the readable page
+    retired the unreadable page's note on every refresh and the unreadable
+    one paid again -- 310 credits a run, indefinitely, on a live sheet.
+    """
+    cache = RecipeCache(tmp_path / "r.json")
+    unreadable = "https://shop.test/product/nope"
+    cache.note_failure(unreadable, SCHEMA.name, "nothing")
+
+    cache.put(URL, SelectorRecipe(fields={"price": ".p"}), SCHEMA.name)
+
+    assert not cache.recently_failed(URL, SCHEMA.name)
+    assert cache.recently_failed(unreadable, SCHEMA.name)
+
+
+def test_a_page_is_written_off_though_the_site_has_a_recipe(tmp_path):
+    """A recipe learned elsewhere on the site is not evidence about this page.
+
+    Two live rows, eurotrek and campolife, each kept a recipe that no longer
+    satisfied the schema: the note could not be written because a recipe
+    existed, so the recipe was recompiled on every single run.
+    """
+    cache = RecipeCache(tmp_path / "r.json")
+    cache.put("https://shop.test/product/works",
+              SelectorRecipe(fields={"price": ".nowhere"}), SCHEMA.name)
+
+    llm = _Hopeless()
+    sw = Scrapewright(cache=cache, llm=llm, fetcher=_Fetcher())
+    assert sw.extract(URL, SCHEMA) is None
+    assert cache.recently_failed(URL, SCHEMA.name)
+
+    spent = llm.calls
+    assert sw.extract(URL, SCHEMA) is None
+    assert llm.calls == spent
 
 
 def test_a_failure_does_not_block_a_site_that_works(tmp_path):

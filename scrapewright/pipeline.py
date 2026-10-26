@@ -341,7 +341,7 @@ class Scrapewright:
                     return record
 
         if not self._can_js():
-            if record is None and allow_llm and self.cache.get(url, schema.name) is None:
+            if record is None and allow_llm:
                 # "static": this process had no browser, so a request that
                 # has one is entitled to try again rather than inherit a
                 # verdict reached without it.
@@ -362,8 +362,7 @@ class Scrapewright:
         rendered_record = self._extract_chain(rendered, url, schema, recipe,
                                               allow_llm, True)
         if (rendered_record is None and record is None
-                and (allow_llm or compiled)
-                and self.cache.get(url, schema.name) is None):
+                and (allow_llm or compiled)):
             # Everything was tried, including the model, and the page still
             # reads as nothing. Write that down: asked again tomorrow, this
             # URL would otherwise cost the same three model calls and
@@ -824,6 +823,10 @@ class Scrapewright:
 
     def _synthesize(self, html: str, url: str, schema: Schema = PRODUCT_SCHEMA):
         self._synth_calls += 1
+        # Counted before the call, not after a usable recipe comes back: the
+        # money is gone either way, and the pages that never produce a recipe
+        # are the ones the daily ceiling is for.
+        self.cache.note_compile(url, schema.name)
         return self.llm.synthesize(html, url, schema)
 
     # ── lifecycle ────────────────────────────────────────────────────────────

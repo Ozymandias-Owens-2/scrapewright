@@ -24,6 +24,9 @@ DEFAULT_SCHEMA_NAME = "product"
 # Where failures live inside the same file. A reserved key rather than a
 # second file: one path to configure, one thing to back up.
 FAILURES_KEY = "__failures__"
+# Compilations counted here rather than on the recipe, because the ones worth
+# counting most are the ones that produced no recipe to count them on.
+COMPILES_KEY = "__compiles__"
 # How long a site stays written off before anyone pays to try it again.
 FAILURE_TTL_SECONDS = 7 * 24 * 60 * 60
 ONE_DAY_SECONDS = 24 * 60 * 60
@@ -53,6 +56,19 @@ def cache_key(url: str, schema_name: str = DEFAULT_SCHEMA_NAME) -> str:
     return domain if schema_name == DEFAULT_SCHEMA_NAME else f"{domain}#{schema_name}"
 
 
+def failure_key(url: str, schema_name: str = DEFAULT_SCHEMA_NAME) -> str:
+    """Where "this page gave nothing" is filed -- per page, not per site.
+
+    A recipe is worth sharing across a domain; a verdict that a page reads
+    as nothing is not. One live spreadsheet watches two cosmos-cafe.es
+    products, one readable and one not. Filed by domain, the readable one's
+    success retired the other's note on every single refresh, and the
+    unreadable page bought a fresh compilation for ever -- 310 credits a
+    run, with nothing to show for any of them.
+    """
+    return url.split('#', 1)[0] + '|' + schema_name
+
+
 class RecipeCache:
     """A tiny JSON-backed store of ``{key: SelectorRecipe}``."""
 
@@ -78,23 +94,17 @@ class RecipeCache:
         schema_name = schema_name or recipe.schema_name or DEFAULT_SCHEMA_NAME
         data = self._load_raw()
         key = cache_key(url, schema_name)
-        previous = data.get(key) if isinstance(data.get(key), dict) else {}
-        now = time.time()
-        since = previous.get("compiles_since", 0)
-        fresh_day = now - since >= ONE_DAY_SECONDS
         body = recipe.model_dump()
-        body["compiled_at"] = now
-        # A running count, so a site that keeps being recompiled can be
-        # stopped without forbidding the first honest repair of the day.
-        body["compiles"] = 1 if fresh_day else int(previous.get("compiles", 0)) + 1
-        body["compiles_since"] = now if fresh_day else since
+        body["compiled_at"] = time.time()
         data[key] = body
-        # Success retires the note that this site could not be read.
-        data.get(FAILURES_KEY, {}).pop(cache_key(url, schema_name), None)
+        # Success retires the note that this page could not be read. Only
+        # this page: the next product along may still be unreadable.
+        data.get(FAILURES_KEY, {}).pop(failure_key(url, schema_name), None)
         self._write(data)
 
     def domains(self) -> list[str]:
-        return sorted(k for k in self._load_raw() if k != FAILURES_KEY)
+        return sorted(k for k in self._load_raw()
+                      if k not in (FAILURES_KEY, COMPILES_KEY))
 
     # ── what did not work, and when ──────────────────────────────────────────
     def last_compiled(self, url: str,
@@ -102,16 +112,37 @@ class RecipeCache:
         raw = self._load_raw().get(cache_key(url, schema_name))
         return raw.get("compiled_at") if isinstance(raw, dict) else None
 
+    def note_compile(self, url: str,
+                     schema_name: str = DEFAULT_SCHEMA_NAME) -> None:
+        """Record that the model was paid to read this site.
+
+        Counted on the way in, not on a recipe written on the way out. A
+        synthesis that produces nothing usable writes no recipe, so counting
+        it there meant the daily ceiling never bound on exactly the pages it
+        exists to cap: five such URLs in one spreadsheet re-compiled on every
+        refresh and were 96% of the bill.
+        """
+        data = self._load_raw()
+        counts = data.setdefault(COMPILES_KEY, {})
+        key = cache_key(url, schema_name)
+        entry = counts.get(key) if isinstance(counts.get(key), dict) else {}
+        now = time.time()
+        since = entry.get("since", 0)
+        fresh_day = now - since >= ONE_DAY_SECONDS
+        counts[key] = {"n": 1 if fresh_day else int(entry.get("n", 0)) + 1,
+                       "since": now if fresh_day else since}
+        self._write(data)
+
     def compiles_today(self, url: str,
                        schema_name: str = DEFAULT_SCHEMA_NAME) -> int:
         """How many times this site has been compiled in the last day."""
-        raw = self._load_raw().get(cache_key(url, schema_name))
-        if not isinstance(raw, dict):
+        entry = self._load_raw().get(COMPILES_KEY, {}).get(
+            cache_key(url, schema_name))
+        if not isinstance(entry, dict):
             return 0
-        since = raw.get("compiles_since", 0)
-        if time.time() - since >= ONE_DAY_SECONDS:
+        if time.time() - entry.get("since", 0) >= ONE_DAY_SECONDS:
             return 0
-        return int(raw.get("compiles", 0))
+        return int(entry.get("n", 0))
 
     def note_failure(self, url: str, schema_name: str = DEFAULT_SCHEMA_NAME,
                      reason: str = "", mode: str = "static") -> None:
@@ -131,7 +162,7 @@ class RecipeCache:
         """
         data = self._load_raw()
         failures = data.setdefault(FAILURES_KEY, {})
-        failures[cache_key(url, schema_name)] = {"at": time.time(),
+        failures[failure_key(url, schema_name)] = {"at": time.time(),
                                                  "reason": reason[:200],
                                                  "mode": mode}
         self._write(data)
@@ -139,13 +170,13 @@ class RecipeCache:
     def failed_at(self, url: str,
                   schema_name: str = DEFAULT_SCHEMA_NAME) -> float | None:
         entry = self._load_raw().get(FAILURES_KEY, {}).get(
-            cache_key(url, schema_name))
+            failure_key(url, schema_name))
         return entry.get("at") if isinstance(entry, dict) else None
 
     def failure_mode(self, url: str,
                      schema_name: str = DEFAULT_SCHEMA_NAME) -> str | None:
         entry = self._load_raw().get(FAILURES_KEY, {}).get(
-            cache_key(url, schema_name))
+            failure_key(url, schema_name))
         return entry.get("mode", "static") if isinstance(entry, dict) else None
 
     def recently_failed(self, url: str, schema_name: str = DEFAULT_SCHEMA_NAME,
@@ -167,10 +198,16 @@ class RecipeCache:
     def clear_failure(self, url: str,
                       schema_name: str = DEFAULT_SCHEMA_NAME) -> None:
         data = self._load_raw()
-        if data.get(FAILURES_KEY, {}).pop(cache_key(url, schema_name), None):
+        if data.get(FAILURES_KEY, {}).pop(failure_key(url, schema_name), None):
             self._write(data)
 
     def _write(self, data: dict) -> None:
+        # Written beside the real file and moved into place, because a write
+        # cut short leaves invalid JSON and _load_raw reads invalid JSON as an
+        # empty cache -- every recipe on the machine, silently gone, and paid
+        # for again one page at a time.
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False),
-                             encoding="utf-8")
+        tmp = self.path.with_suffix(self.path.suffix + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(tmp, self.path)
