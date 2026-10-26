@@ -1,9 +1,16 @@
 """Prepaid credits: pay for what you use, no subscription.
 
 One action anchors the whole scheme — **compiling a new site**, the only step
-that costs real money (~$0.06 of model tokens). Everything else is parsing.
-So credits are priced off that: a synthesis must earn enough to keep the
-margin, and every other unit is denominated relative to it.
+that costs real money. Everything else is parsing. So credits are priced off
+that: a synthesis must earn enough to keep the margin, and every other unit is
+denominated relative to it.
+
+What it costs has moved. It was assumed here to be ~$0.06; measured with the
+real tokenizer on live pages it was $0.10 to $0.47, which on the largest pack
+was a loss on every compile. Two changes brought it down: the prompt is half
+the size it was, and the recipe is written by the cheap model with the strong
+one asked only when the cheap recipe cannot read its own page. A typical
+compile is now ~$0.002, and ~$0.012 blended with escalations.
 
     1 record delivered   =   1 credit
     1 browser render     =   5 credits
@@ -46,7 +53,7 @@ class CreditPack:
     def usd_per_credit(self) -> float:
         return self.price_usd / self.credits
 
-    def margin_on_synthesis(self, synthesis_cost_usd: float = 0.06) -> float:
+    def margin_on_synthesis(self, synthesis_cost_usd: float = 0.012) -> float:
         """Margin on the costliest action — the number that binds.
 
         If this holds, everything else in the pack is comfortably profitable,

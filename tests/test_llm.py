@@ -120,9 +120,11 @@ class _FakeMessages:
     def __init__(self, reply):
         self._reply = reply
         self.calls = 0
+        self.models = []
 
     def create(self, **kwargs):
         self.calls += 1
+        self.models.append(kwargs.get("model"))
         return type("Msg", (), {"content": [_FakeBlock(self._reply)]})()
 
 
@@ -131,10 +133,49 @@ class _FakeClient:
         self.messages = _FakeMessages(reply)
 
 
+ANSWERS = ('<h1 class="product__title">Boot</h1>'
+           '<p class="price">&euro;52.15</p>')
+
+
 def test_synthesize_uses_injected_client():
     client = _FakeClient(MODEL_REPLY)
     ex = LlmExtractor(client=client)
-    recipe = ex.synthesize("<html>...</html>", "https://x/p")
+    recipe = ex.synthesize(ANSWERS, "https://x/p")
     assert recipe is not None
     assert recipe.price == ".price"
+    assert client.messages.calls == 1        # the cheap model got it right
+
+
+# ── two models, one answer ─────────────────────────────────────────────────
+def test_a_recipe_that_cannot_read_its_own_page_is_asked_again():
+    """The cheap model writes nine recipes out of ten and costs a fiftieth
+    of the strong one. The tenth is why the strong one is still here: a
+    recipe that returns nothing from the very page it was written from is
+    either malformed or pointing at the wrong element."""
+    client = _FakeClient(MODEL_REPLY)
+    ex = LlmExtractor(client=client, escalate_to="claude-opus-5")
+    ex.synthesize("<h1>Boot</h1><p>no price anywhere</p>", "https://x/p")
+    assert client.messages.calls == 2
+    assert client.messages.models == ["claude-haiku-5-5", "claude-opus-5"]
+
+
+def test_escalation_can_be_turned_off():
+    client = _FakeClient(MODEL_REPLY)
+    ex = LlmExtractor(client=client, escalate_to=None)
+    ex.synthesize("<h1>Boot</h1><p>no price anywhere</p>", "https://x/p")
     assert client.messages.calls == 1
+
+
+def test_the_cheap_answer_is_kept_when_the_strong_one_has_none():
+    """Half an answer beats none: the recipe the cheap model wrote is still
+    the best thing in the room."""
+    class _Fickle(_FakeMessages):
+        def create(self, **kwargs):
+            self.calls += 1
+            reply = MODEL_REPLY if self.calls == 1 else "sorry, no idea"
+            return type("Msg", (), {"content": [_FakeBlock(reply)]})()
+
+    client = _FakeClient(MODEL_REPLY)
+    client.messages = _Fickle(MODEL_REPLY)
+    recipe = LlmExtractor(client=client).synthesize("<h1>x</h1>", "https://x/p")
+    assert recipe is not None and recipe.price == ".price"

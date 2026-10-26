@@ -25,7 +25,24 @@ from .base import SelectorRecipe
 # The Anthropic SDK is an optional extra — the deterministic Shopify / Woo /
 # JSON-LD paths work without it. Import lazily so `import scrapewright` never
 # hard-requires it.
-DEFAULT_MODEL = "claude-opus-5"
+# Writing a CSS selector from a page is a structured job with a checkable
+# answer, and the cheap model is good at it. Measured over twelve live pages
+# from a customer's spreadsheet: Haiku got the price right on 9 of 9 readable
+# pages, Opus on 8 -- Opus took the struck-through 50,00 EUR on a climbing
+# shop where Haiku took the 100,00 EUR a buyer pays. Per compile: $0.0021
+# against $0.1004, which is forty-eight times.
+#
+# Where Haiku is worse is in answering when it should not: offered no real
+# availability text it will point at the specification table. That is caught
+# at compile time now (see ``prune_unusable``), and anything it gets wrong
+# enough to leave the page unanswered is asked again of the stronger model,
+# below -- so a bad guess costs an Opus call, not a wrong number in a
+# customer's spreadsheet.
+DEFAULT_MODEL = os.environ.get("SCRAPEWRIGHT_SYNTH_MODEL", "claude-haiku-5-5")
+# Asked only when the cheap recipe does not answer the page it was written
+# from. Set the variable empty to turn escalation off.
+ESCALATION_MODEL = os.environ.get("SCRAPEWRIGHT_SYNTH_ESCALATION",
+                                  "claude-opus-5")
 
 
 class ProviderError(RuntimeError):
@@ -261,8 +278,10 @@ class LlmExtractor:
     """Wraps the Anthropic call that turns HTML into a recipe."""
 
     def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None,
-                 client=None, html_cap: int = DEFAULT_HTML_CAP):
+                 client=None, html_cap: int = DEFAULT_HTML_CAP,
+                 escalate_to: str | None = ESCALATION_MODEL):
         self.model = model
+        self.escalate_to = escalate_to or None
         self._client = client
         self._api_key = api_key
         self.html_cap = html_cap
@@ -294,14 +313,28 @@ class LlmExtractor:
 
         ``rows`` asks for a listing recipe instead: a container selector plus
         fields read inside it, so the page yields one record per card.
+
+        Two models, one answer. The cheap one writes the recipe; if that
+        recipe cannot answer the very page it was written from, the stronger
+        one is asked instead. The caller sees one synthesis and is billed for
+        one, because they asked for one site to be compiled -- the second
+        call is ours to pay for, and at a fiftieth of the price of making
+        every compile the expensive kind, it is a good trade.
         """
-        template = _ROWS_PROMPT if rows else _PROMPT
-        prompt = template.format(field_lines=schema.prompt_lines(),
-                                 html=reduce_html(html, cap=self.html_cap))
+        prompt = (_ROWS_PROMPT if rows else _PROMPT).format(
+            field_lines=schema.prompt_lines(),
+            html=reduce_html(html, cap=self.html_cap))
+        recipe = self._ask(self.model, prompt, schema)
+        if self.escalate_to and self.escalate_to != self.model                 and not self._answers(recipe, html, url, schema, rows):
+            recipe = self._ask(self.escalate_to, prompt, schema) or recipe
+        return recipe
+
+    def _ask(self, model: str, prompt: str,
+             schema: Schema) -> SelectorRecipe | None:
         client = self._get_client()
         try:
             msg = client.messages.create(
-                model=self.model,
+                model=model,
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -310,6 +343,28 @@ class LlmExtractor:
             # provider's, named so the service can answer "try again"
             # instead of "your page is broken".
             raise ProviderError(f"{type(e).__name__}: {e}") from e
-        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-        return recipe_from_text(text, origin=f"llm:{self.model}",
+        text = "".join(b.text for b in msg.content
+                       if getattr(b, "type", "") == "text")
+        return recipe_from_text(text, origin=f"llm:{model}",
                                 schema_name=schema.name)
+
+    @staticmethod
+    def _answers(recipe, html: str, url: str, schema: Schema,
+                 rows: bool) -> bool:
+        """Does this recipe read the page it was written from?
+
+        The only check worth making, and the page itself makes it. A recipe
+        that comes back empty here is either malformed or pointing at the
+        wrong element, and both are worth the stronger model.
+        """
+        if recipe is None:
+            return False
+        from .selectors import SelectorExtractor      # avoids a cycle at import
+
+        extractor = SelectorExtractor(recipe, schema)
+        try:
+            if rows:
+                return bool(extractor.extract_rows(html, url))
+            return schema.is_satisfied_by(extractor.extract_values(html, url))
+        except Exception:
+            return False
