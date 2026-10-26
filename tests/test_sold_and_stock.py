@@ -216,3 +216,39 @@ def test_a_short_answer_is_still_an_answer():
     for said in ("En stock", "26 vorrätig", "Nog 3 op voorraad, morgen in huis"):
         html = f'<h1>A</h1><p class="s">{said}</p>'
         assert prune_unusable(recipe, schema, html, URL).fields["in stock"] == ".s", said
+
+
+# ── 5. a sold camper is an answer, not a broken recipe ─────────────────────
+def test_a_sold_camper_does_not_buy_a_compilation_every_morning():
+    """The most expensive line in the whole ledger.
+
+    avereschcampers.nl, one sold camper, one spreadsheet row: a credit a
+    refresh until the note was introduced, 306 a refresh afterwards -- a
+    render and a compilation, bought again and again to be told the same
+    thing, because an empty price read as a recipe that needed healing.
+    """
+    schema = Schema.from_names(["price", "in stock"])
+    recipe = SelectorRecipe(fields={"price": ".price", "in stock": ".stock"},
+                            schema_name=schema.name)
+    html = '<p class="price">Verkocht</p><p class="stock">Verkocht</p>'
+    values = SelectorExtractor(recipe, schema).extract_values(html, URL)
+
+    assert "price" not in values            # the word never stands in for a number
+    assert values["price_note"] == "Verkocht"
+    assert schema.is_satisfied_by(values)   # and the page has been read
+
+
+def test_a_selector_that_only_ever_finds_words_still_goes():
+    """Which is what makes the note above worth trusting: the evidence is
+    collected once, when the recipe is written."""
+    schema = Schema.from_names(["price", "in stock"])
+    recipe = SelectorRecipe(fields={"price": "meta[name='description']"},
+                            modes={"price": "attr:content"},
+                            schema_name=schema.name)
+    html = '<meta name="description" content="Occasion Volkswagen Taigo TSI">'
+    assert "price" not in prune_unusable(recipe, schema, html, URL).fields
+
+
+def test_an_unanswered_field_is_still_unanswered():
+    schema = Schema.from_names(["price", "in stock"])
+    assert not schema.is_satisfied_by({"in stock": "En stock"})

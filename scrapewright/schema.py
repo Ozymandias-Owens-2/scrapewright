@@ -154,17 +154,24 @@ class Schema:
         return out
 
     def is_satisfied_by(self, values: dict) -> bool:
-        """A record is usable when every required field came back non-empty.
+        """A record is usable when every required field came back answered.
 
-        A page that states its price as "€ 0" has answered: it is for sale
-        on request. The cell stays empty, but the record counts as complete,
-        or every such page would look like a broken recipe and buy itself a
-        render and a synthesis it can never be fixed by.
+        Answered, not non-empty. A page that states its price as "€ 0" has
+        answered: it is for sale on request. So has a sold camper whose
+        price column reads "Verkocht" -- the selector is pointing at the
+        right element, and that element says there is no price today.
+
+        Both come back as ``<field>_note`` with the field itself empty, and
+        both used to read as a broken recipe. One real spreadsheet row, a
+        camper sold in October, cost a credit to refresh until the day the
+        note was introduced and 306 every refresh after it -- a render and
+        a compilation, bought over and over, to be told the same thing. The
+        evidence that the selector is sound is collected once, at compile
+        time, by :func:`prune_unusable`: a money selector that finds words
+        and no number there does not survive. One that did survive and
+        finds words today is reporting the page, not failing to read it.
         """
-        from .models import PRICE_ON_REQUEST
-
-        return all(values.get(name)
-                   or values.get(f"{name}_note") == PRICE_ON_REQUEST
+        return all(values.get(name) or values.get(f"{name}_note")
                    for name in self.required)
 
     def prompt_lines(self) -> str:

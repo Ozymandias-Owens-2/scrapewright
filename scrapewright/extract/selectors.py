@@ -326,7 +326,11 @@ def prune_unusable(recipe, schema: Schema, html: str, url: str):
                 recipe.modes.pop(field.name, None)
             continue
 
-        if field.kind != "number":
+        # Every money field, not only one declared ``number``. A column
+        # headed "price" is a money field whatever its kind, and the
+        # evidence test below is what lets a note be trusted later as "the
+        # page says there is no price" rather than "the selector is wrong".
+        if not is_money_field(field):
             continue
         value = values.get(field.name)
         if value is None:
