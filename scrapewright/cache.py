@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,6 +32,13 @@ COMPILES_KEY = "__compiles__"
 # How long a site stays written off before anyone pays to try it again.
 FAILURE_TTL_SECONDS = 7 * 24 * 60 * 60
 ONE_DAY_SECONDS = 24 * 60 * 60
+# One writer at a time. Four rows of a spreadsheet now arrive together, and
+# read-modify-write without this drops whichever change was read first: a
+# compile counted by one thread and forgotten by the next, which is how a
+# domain compiled three times under a ceiling of two.
+# ponytail: a thread lock, because the service is one process on one machine.
+# A second process needs a file lock, and a second machine needs the store.
+_WRITE_LOCK = threading.RLock()
 
 
 def default_cache_path() -> Path:
@@ -75,6 +84,14 @@ class RecipeCache:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else default_cache_path()
 
+    @contextmanager
+    def _mutate(self):
+        """Read, change and write back with nobody else in between."""
+        with _WRITE_LOCK:
+            data = self._load_raw()
+            yield data
+            self._write(data)
+
     def _load_raw(self) -> dict:
         if not self.path.exists():
             return {}
@@ -92,7 +109,11 @@ class RecipeCache:
     def put(self, url: str, recipe: SelectorRecipe,
             schema_name: str | None = None) -> None:
         schema_name = schema_name or recipe.schema_name or DEFAULT_SCHEMA_NAME
-        data = self._load_raw()
+        with self._mutate() as data:
+            self._put(data, url, recipe, schema_name)
+
+    def _put(self, data: dict, url: str, recipe: SelectorRecipe,
+             schema_name: str) -> None:
         key = cache_key(url, schema_name)
         body = recipe.model_dump()
         body["compiled_at"] = time.time()
@@ -100,7 +121,6 @@ class RecipeCache:
         # Success retires the note that this page could not be read. Only
         # this page: the next product along may still be unreadable.
         data.get(FAILURES_KEY, {}).pop(failure_key(url, schema_name), None)
-        self._write(data)
 
     def domains(self) -> list[str]:
         return sorted(k for k in self._load_raw()
@@ -122,16 +142,15 @@ class RecipeCache:
         exists to cap: five such URLs in one spreadsheet re-compiled on every
         refresh and were 96% of the bill.
         """
-        data = self._load_raw()
-        counts = data.setdefault(COMPILES_KEY, {})
-        key = cache_key(url, schema_name)
-        entry = counts.get(key) if isinstance(counts.get(key), dict) else {}
-        now = time.time()
-        since = entry.get("since", 0)
-        fresh_day = now - since >= ONE_DAY_SECONDS
-        counts[key] = {"n": 1 if fresh_day else int(entry.get("n", 0)) + 1,
-                       "since": now if fresh_day else since}
-        self._write(data)
+        with self._mutate() as data:
+            counts = data.setdefault(COMPILES_KEY, {})
+            key = cache_key(url, schema_name)
+            entry = counts.get(key) if isinstance(counts.get(key), dict) else {}
+            now = time.time()
+            since = entry.get("since", 0)
+            fresh_day = now - since >= ONE_DAY_SECONDS
+            counts[key] = {"n": 1 if fresh_day else int(entry.get("n", 0)) + 1,
+                           "since": now if fresh_day else since}
 
     def compiles_today(self, url: str,
                        schema_name: str = DEFAULT_SCHEMA_NAME) -> int:
@@ -160,12 +179,9 @@ class RecipeCache:
         next request with ``js=true`` skipped the browser entirely and
         returned nothing -- on a page whose price a browser finds at once.
         """
-        data = self._load_raw()
-        failures = data.setdefault(FAILURES_KEY, {})
-        failures[failure_key(url, schema_name)] = {"at": time.time(),
-                                                 "reason": reason[:200],
-                                                 "mode": mode}
-        self._write(data)
+        with self._mutate() as data:
+            data.setdefault(FAILURES_KEY, {})[failure_key(url, schema_name)] = {
+                "at": time.time(), "reason": reason[:200], "mode": mode}
 
     def failed_at(self, url: str,
                   schema_name: str = DEFAULT_SCHEMA_NAME) -> float | None:
@@ -197,17 +213,20 @@ class RecipeCache:
 
     def clear_failure(self, url: str,
                       schema_name: str = DEFAULT_SCHEMA_NAME) -> None:
-        data = self._load_raw()
-        if data.get(FAILURES_KEY, {}).pop(failure_key(url, schema_name), None):
-            self._write(data)
+        with self._mutate() as data:
+            data.get(FAILURES_KEY, {}).pop(failure_key(url, schema_name), None)
 
     def _write(self, data: dict) -> None:
         # Written beside the real file and moved into place, because a write
         # cut short leaves invalid JSON and _load_raw reads invalid JSON as an
         # empty cache -- every recipe on the machine, silently gone, and paid
         # for again one page at a time.
+        # The temporary name carries the thread as well as the process: two
+        # threads sharing one name is not a near miss but a guaranteed
+        # collision, and on Windows the loser's os.replace raises outright.
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + f".{os.getpid()}.tmp")
+        tmp = self.path.with_suffix(
+            f"{self.path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
                        encoding="utf-8")
         os.replace(tmp, self.path)

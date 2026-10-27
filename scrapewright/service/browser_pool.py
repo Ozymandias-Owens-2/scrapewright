@@ -46,6 +46,31 @@ class NoBrowserSlot(RuntimeError):
     """Every browser slot is busy and waiting has not helped."""
 
 
+# Slots are sized for the render service, which is other machines with their
+# own memory. The fallback is Chromium in *this* container, inside the same
+# two gigabytes as the API -- and a renderer outage is precisely when the API
+# must stay up rather than be killed for memory.
+_FALLBACK_SLOT = threading.BoundedSemaphore(1)
+
+
+class _OneAtATime:
+    """The local browser, held to one render regardless of the slot count."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    @property
+    def alive(self) -> bool:
+        return self._inner.alive
+
+    def fetch(self, url: str):
+        with _FALLBACK_SLOT:
+            return self._inner.fetch(url)
+
+    def close(self) -> None:
+        self._inner.close()
+
+
 class BrowserPool:
     """The process's browsers: how many may run, and the one that does."""
 
@@ -105,7 +130,8 @@ class BrowserPool:
             # and each caller may want a different scroll depth.
             return RemoteBrowserFetcher(
                 remote, os.environ.get(RENDER_TOKEN_ENV, ""),
-                local_fallback=self._local_fetcher(BrowserFetcher, **kwargs),
+                local_fallback=_OneAtATime(
+                    self._local_fetcher(BrowserFetcher, **kwargs)),
                 **kwargs)
         return self._local_fetcher(BrowserFetcher, **kwargs)
 

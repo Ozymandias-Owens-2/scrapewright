@@ -267,6 +267,19 @@ class Scrapewright:
             yield product
 
     # ── Generic extraction (self-healing + browser escalation) ───────────────
+    @staticmethod
+    def _answered(record, schema: Schema) -> bool:
+        """Did the page actually give up what was asked for?
+
+        An empty Record is not an answer. Judging "was this page readable"
+        on whether an object came back meant a page that produced a record
+        with nothing in it was never written off -- the caller got a 422 and
+        the site bought a fresh compilation on every refresh. Live, after
+        the per-page notes landed: three sites still re-compiling daily and
+        not one failure note in the cache.
+        """
+        return record is not None and schema.is_satisfied_by(record.data)
+
     def extract(self, url: str, schema: Schema = PRODUCT_SCHEMA, *,
                 allow_llm: bool = True, retry: bool = False) -> Record | None:
         """Pull ``schema``'s fields off one page.
@@ -341,7 +354,7 @@ class Scrapewright:
                     return record
 
         if not self._can_js():
-            if record is None and allow_llm:
+            if allow_llm and not self._answered(record, schema):
                 # "static": this process had no browser, so a request that
                 # has one is entitled to try again rather than inherit a
                 # verdict reached without it.
@@ -361,8 +374,11 @@ class Scrapewright:
         recipe = self.cache.get(url, schema.name) or recipe
         rendered_record = self._extract_chain(rendered, url, schema, recipe,
                                               allow_llm, True)
-        if (rendered_record is None and record is None
-                and (allow_llm or compiled)):
+        # Keep whichever answered more of the question.
+        best = max((r for r in (rendered_record, record) if r is not None),
+                   key=lambda r: sum(1 for v in r.data.values() if v),
+                   default=None)
+        if (allow_llm or compiled) and not self._answered(best, schema):
             # Everything was tried, including the model, and the page still
             # reads as nothing. Write that down: asked again tomorrow, this
             # URL would otherwise cost the same three model calls and
@@ -373,10 +389,7 @@ class Scrapewright:
             self.cache.note_failure(url, schema.name,
                                     "synthesis produced no usable recipe",
                                     mode="js")
-        # Keep whichever answered more of the question.
-        return max((r for r in (rendered_record, record) if r is not None),
-                   key=lambda r: sum(1 for v in r.data.values() if v),
-                   default=None)
+        return best
 
     def _teach_on_rendered(self, url: str, schema: Schema,
                            static_html: str) -> tuple[Record | None, bool]:

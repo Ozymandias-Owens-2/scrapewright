@@ -253,3 +253,38 @@ def test_retry_clears_a_failure_of_either_mode(tmp_path):
                       browser=_Browser())
     assert sw.extract(URL, schema, retry=True) is not None
     assert not cache.recently_failed(URL, schema.name, can_js=True)
+
+
+# ── four rows of a spreadsheet arrive at once ────────────────────────────────
+def test_concurrent_writers_do_not_drop_each_others_changes(tmp_path):
+    """Read-modify-write on one file, from several threads at once.
+
+    Unlocked, two writers read the same file, each adds its own entry and
+    the second write drops the first -- a compile counted and forgotten,
+    which is how a domain compiled three times under a ceiling of two. On
+    Windows it was worse than a lost update: both threads wrote the same
+    temporary name and the loser's os.replace raised, killing the request.
+    """
+    import threading
+
+    cache = RecipeCache(tmp_path / "r.json")
+    errors = []
+
+    def hammer(n):
+        try:
+            for _ in range(5):
+                cache.note_compile(URL, SCHEMA.name)
+                cache.note_failure(f"https://shop.test/p/{n}", SCHEMA.name, "no")
+        except Exception as e:                     # recorded, asserted on
+            errors.append(e)
+
+    threads = [threading.Thread(target=hammer, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+
+    assert errors == []
+    assert cache.compiles_today(URL, SCHEMA.name) == 20
+    for n in range(4):
+        assert cache.recently_failed(f"https://shop.test/p/{n}", SCHEMA.name)

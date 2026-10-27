@@ -45,13 +45,21 @@ class _SlowLlm:
 
     def __init__(self, delay=0.4):
         self.delay, self.calls = delay, 0
+        self.peak = 0            # most calls inside synthesize at any moment
+        self._inside = 0
         self._lock = threading.Lock()
 
     def synthesize(self, html, url, schema=None, **kw):
         with self._lock:
             self.calls += 1
-        time.sleep(self.delay)
-        return RECIPE.model_copy(deep=True)
+            self._inside += 1
+            self.peak = max(self.peak, self._inside)
+        try:
+            time.sleep(self.delay)
+            return RECIPE.model_copy(deep=True)
+        finally:
+            with self._lock:
+                self._inside -= 1
 
 
 def _pipeline(tmp_path, llm, name="recipes.json"):
@@ -98,14 +106,17 @@ def test_two_different_sites_compile_at_the_same_time(tmp_path):
     llm = _SlowLlm(delay=0.5)
     sw = _pipeline(tmp_path, llm)
 
-    start = time.perf_counter()
     out = _both(lambda url: sw.extract(url, PRODUCT_SCHEMA),
                 ("https://one.test/p/1",), ("https://two.test/p/1",))
-    elapsed = time.perf_counter() - start
 
     assert llm.calls == 2
     assert out["a"] is not None and out["b"] is not None
-    assert elapsed < 0.9, "two sites were compiled one after the other"
+    # Overlap, not wall clock. Timing the pair said the same thing until a
+    # loaded machine took longer than the margin and failed a gate that was
+    # working perfectly: 0.4s of slack on a 0.5s sleep is a coin toss, and
+    # the question was never how fast the two ran but whether either waited
+    # for the other.
+    assert llm.peak == 2, "two sites were compiled one after the other"
 
 
 def test_the_waiter_replays_rather_than_recompiling(tmp_path):
