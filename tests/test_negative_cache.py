@@ -288,3 +288,23 @@ def test_concurrent_writers_do_not_drop_each_others_changes(tmp_path):
     assert cache.compiles_today(URL, SCHEMA.name) == 20
     for n in range(4):
         assert cache.recently_failed(f"https://shop.test/p/{n}", SCHEMA.name)
+
+
+def test_retry_still_obeys_the_daily_ceiling(tmp_path):
+    """"Try it again" is not "spend without limit".
+
+    The add-on set retry on every row whose status read "Nothing found" and
+    did it on every press, including the automatic continuation. Each press
+    retired the note and bought a fresh compilation: two such rows were 615
+    of one live run's 727 credits.
+    """
+    from scrapewright.pipeline import MAX_COMPILES_PER_DAY
+
+    cache = RecipeCache(tmp_path / "r.json")
+    llm = _Hopeless()
+    sw = Scrapewright(cache=cache, llm=llm, fetcher=_Fetcher())
+
+    for _ in range(MAX_COMPILES_PER_DAY + 3):
+        sw.extract(URL, SCHEMA, retry=True)
+
+    assert llm.calls == MAX_COMPILES_PER_DAY

@@ -286,12 +286,13 @@ class Scrapewright:
 
         ``retry`` asks to try compiling a site that has already failed. Not
         the default, because the normal thing to do with a page nobody can
-        read is to stop paying to re-read it.
+        read is to stop paying to re-read it. It retires the note; it does
+        not lift the daily ceiling.
         """
         recipe = self.cache.get(url, schema.name)
         if retry:
             self.cache.clear_failure(url, schema.name)
-        elif allow_llm:
+        if allow_llm:
             # Compiling this site failed recently, or has already run today.
             # Either way the model is not called again. A page the model
             # cannot read costs the same every time it is asked -- three
@@ -300,6 +301,13 @@ class Scrapewright:
             # ceiling applies even when a recipe exists, since a recipe can
             # be written, found wanting, and rewritten on every page of a
             # thousand-page crawl.
+            #
+            # It applies to a retry too. "Try this page again" is a caller
+            # saying the page may have changed, not a licence to spend
+            # without limit -- and one did: the spreadsheet add-on set
+            # retry on every row reading "Nothing found", on every press,
+            # so two such rows bought a fresh compilation per press for as
+            # long as they kept failing. 615 of one run's 727 credits.
             allow_llm = not (
                 self.cache.recently_failed(url, schema.name,
                                            can_js=self._can_js())
