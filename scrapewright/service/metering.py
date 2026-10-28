@@ -33,8 +33,16 @@ class _CountingFetcher:
     counter: str  # "pages" or "renders"
 
     def fetch(self, url: str):
-        setattr(self.meter, self.counter, getattr(self.meter, self.counter) + 1)
-        return self.inner.fetch(url)
+        html = self.inner.fetch(url)
+        # Counted on the way out, and only when a page came back. Counting on
+        # the way in billed for renders that never happened: with the render
+        # service full it answers 503 and this returns nothing, and a live
+        # sheet paid ten credits for two empty renders and was told "Nothing
+        # found" about a page that reads perfectly well.
+        if html is not None:
+            setattr(self.meter, self.counter,
+                    getattr(self.meter, self.counter) + 1)
+        return html
 
     def close(self) -> None:
         # Deliberately not closing the inner fetcher: the browser belongs to

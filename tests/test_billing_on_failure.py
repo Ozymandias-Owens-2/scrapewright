@@ -148,3 +148,31 @@ def test_work_that_did_happen_is_still_charged(store, keyed, monkeypatch):
 
     assert r.status_code == 200
     assert store.balance(key.id) < before
+
+
+def test_a_render_that_produced_nothing_is_not_billed():
+    """The render queue being full is our problem, not the customer's.
+
+    Live, after the browser ceiling was raised above what the render app
+    could actually serve: the renderer answered 503, the fetcher returned
+    nothing, and two sites were charged ten credits each for renders that
+    never happened -- and shown "Nothing found" about pages that read
+    perfectly well the day before.
+    """
+    from scrapewright.service.metering import Meter, _CountingFetcher
+
+    meter = Meter()
+
+    class Full:
+        def fetch(self, url):
+            return None          # renderer busy; no page came back
+
+    assert _CountingFetcher(Full(), meter, "renders").fetch("https://x.test") is None
+    assert meter.renders == 0
+
+    class Answers:
+        def fetch(self, url):
+            return "<html></html>"
+
+    _CountingFetcher(Answers(), meter, "renders").fetch("https://x.test")
+    assert meter.renders == 1

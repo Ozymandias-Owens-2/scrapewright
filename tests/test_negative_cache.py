@@ -308,3 +308,43 @@ def test_retry_still_obeys_the_daily_ceiling(tmp_path):
         sw.extract(URL, SCHEMA, retry=True)
 
     assert llm.calls == MAX_COMPILES_PER_DAY
+
+
+RENDERED_NO_PRICE = "<html><body><h1>A thing</h1><p>still no price</p></body></html>"
+
+
+def test_one_compilation_per_request_even_when_the_browser_gives_nothing(tmp_path):
+    """A silent browser must not buy the model two goes at one page.
+
+    The one-compile-per-request guard was a flag set by the teach-on-rendered
+    hop. When that hop could not get a page -- a full render queue -- it
+    reported nothing paid for, and the static and rendered hops then bought
+    a compilation each: three sites spent 610 credits in a single live
+    request that way, against a daily ceiling of two.
+    """
+    cache = RecipeCache(tmp_path / "r.json")
+
+    class _BusyThenFree:
+        """The render queue as it actually behaved: full, then not.
+
+        Both hops that can compile need a page. Give the first one nothing
+        and the second one a page, and the request pays twice.
+        """
+        alive = True
+        def __init__(self): self.calls = 0
+        def fetch(self, url):
+            self.calls += 1
+            return None if self.calls == 1 else RENDERED_NO_PRICE
+        def close(self): pass
+
+    class _RealPage:
+        """Not a client-side shell -- the static hop will work on this."""
+        def fetch(self, url):
+            return "<html><body><h1>A thing</h1><p>prose, no price</p></body></html>"
+        def close(self): pass
+
+    browser, llm = _BusyThenFree(), _Hopeless()
+    sw = Scrapewright(cache=cache, llm=llm, fetcher=_RealPage(), browser=browser)
+    sw.extract(URL, SCHEMA)
+    assert browser.calls == 2, "the second hop never reached the browser"
+    assert llm.calls == 1

@@ -25,15 +25,25 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
   # deploy costs real money to work out again.
   SCRAPEWRIGHT_CACHE = "/data/recipes.json"
   SCRAPEWRIGHT_OBEY_ROBOTS = "1"
-  # Four renders at a time. One was a memory limit from when Chromium ran
-  # in this container -- eight concurrent ones each started their own and
-  # the kernel killed the service. Rendering has since moved to
-  # scrapewright-render, which is two machines with their own memory, and
-  # this semaphore was quietly throttling both of them down to one: a
-  # spreadsheet of forty rows spent 246 of its 269 seconds on five renders
-  # that could have overlapped. The local fallback stays at one whatever
-  # this says, because that one does run here (see browser_pool).
-  BROWSER_SLOTS = "4"
+  # Two renders at a time, which is what scrapewright-render can actually
+  # do: two machines, one browser each. One was the old limit from when
+  # Chromium ran in this container and it throttled both of those machines
+  # down to a single page at a time -- a forty-row sheet spent 246 of its
+  # 269 seconds on five renders that could have overlapped.
+  #
+  # Four was too many, and the way it failed is worth remembering: this
+  # semaphore let four through, the renderer answered 503 to the two it had
+  # no browser for, and the pipeline read "no HTML" as "this page is
+  # empty". Three rows that had worked the day before came back "Nothing
+  # found", and two sites paid for a second compilation because the first
+  # one never got a page to read. A ceiling above the real capacity is not
+  # a ceiling; it just moves the failure somewhere it reads as a bug in the
+  # page. Raise this when the render app grows, not before.
+  # The local fallback stays at one whatever this says (see browser_pool).
+  BROWSER_SLOTS = "2"
+  # Long enough to queue behind a render rather than be refused: a batch of
+  # four arrives at once and a render takes twenty to thirty seconds.
+  BROWSER_WAIT_SECONDS = "60"
   # Matched to the renders above and to the add-on's batch size. Lower, and
   # a client sending a full batch gets a 429 for the tail of it.
   MAX_IN_FLIGHT_PER_KEY = "4"

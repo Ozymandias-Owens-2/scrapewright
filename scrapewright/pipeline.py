@@ -327,6 +327,14 @@ class Scrapewright:
         # -- 639 credits where 305 was the honest price -- because the static
         # copy is a worse likeness of what the visitor sees, and the model
         # picked worse selectors from it.
+        # One compilation per request, whatever route it takes. The flag
+        # below only covers the teach-on-rendered hop: when the browser
+        # could not answer -- a full render queue, say -- that hop reported
+        # "nothing paid for", and the static and rendered hops then bought a
+        # compilation each. Live, three sites paid 610 credits in a single
+        # request that way. The counter does not care which hop spent it.
+        synth_at_entry = self._synth_calls
+
         compiled = False
         if recipe is None and allow_llm and self._can_js() and html is not None:
             taught, compiled = self._teach_on_rendered(url, schema, html)
@@ -374,6 +382,7 @@ class Scrapewright:
         rendered = self._browser_fetch(url)
         if rendered is None:
             return record
+        allow_llm = allow_llm and self._synth_calls == synth_at_entry
         # The static hop may have just written a recipe. Read it back before
         # rendering, or the browser pass starts from nothing and pays the model
         # a second time for the page we already bought -- twice the cost, to us
