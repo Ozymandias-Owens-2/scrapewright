@@ -11,7 +11,7 @@
 <a class="mark" href="/"><span class="dot"></span> scrapewright</a>
 
 <h1>Privacy notice</h1>
-<p class="updated">Last updated 20 September 2026</p>
+<p class="updated">Last updated 29 October 2026</p>
 
 <div class="callout">
 Short version: your email address and IP are stored as one-way hashes and cannot be
@@ -57,6 +57,38 @@ another customer benefits from a site you were first to compile, and that the se
 domains compiled is not private between customers.</p>
 <p>The rows extracted for you are not shared. Job results are yours and are readable
 only with your key.</p>
+
+<h2>The Sheets add-on and your Google data</h2>
+<p>Sheetwatch is a Google Sheets add-on that fills columns from the pages you list
+in a spreadsheet. Installing it asks Google for permission to read and write your
+spreadsheets, to make requests to this service, and to run on a schedule.</p>
+<p>What leaves your spreadsheet is deliberately small. We send this service
+<strong>the URLs in your URL column and the names of your other column headers</strong>
+&mdash; nothing else. Prices, notes, your own <code>#</code> columns, the sheet's name,
+other sheets in the file and other files in your Drive are never read and never
+transmitted. The values that come back are written into your sheet and into its
+<em>Changes</em> log, both of which stay in your Google account.</p>
+<p>Your API key is held in Apps Script's per-user property store, which lives in your
+Google account and is readable only by this add-on when you are the one running it.
+It is not copied to our servers in readable form; see the hashing described above.</p>
+<p>The add-on asks for permission over all your spreadsheets rather than only the
+open one because a scheduled refresh runs while no spreadsheet is open, and the
+narrower permission Google offers works only in a sheet you are looking at. It is
+used solely to reopen the sheet you turned refreshing on for. The add-on never
+enumerates, opens or reads any other file.</p>
+<p><strong>Limited Use.</strong> Sheetwatch's use and transfer of information received
+from Google APIs adheres to the
+<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API
+Services User Data Policy</a>, including its Limited Use requirements. We do not use
+Google user data for advertising, we do not sell it, we do not transfer it to others
+except as needed to provide the feature you asked for, and no human reads it except
+where you have asked us to for support, where the law requires it, or for security.
+Google user data is not used to train any model: the HTML that a page compiler sees
+is fetched by this service from the public web, not taken from your spreadsheet.</p>
+<p>Removing the add-on from a spreadsheet, or revoking its access at
+<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>,
+stops all of this at once. Anything already written to your sheet is yours and stays
+there.</p>
 
 <h2>Third parties</h2>
 <ul>

@@ -455,7 +455,7 @@ def test_the_pages_a_payment_processor_asks_for_are_served(tmp_path):
 
     client = TestClient(create_app(store=Store(tmp_path / "l.db"), jobs=JobRegistry()))
 
-    for path in ("/terms", "/refunds", "/privacy", "/account"):
+    for path in ("/terms", "/refunds", "/privacy", "/support", "/account"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert "text/html" in r.headers["content-type"]
@@ -464,6 +464,33 @@ def test_the_pages_a_payment_processor_asks_for_are_served(tmp_path):
         assert "mailto:" in r.text, path
 
     assert client.get("/static/legal.css").status_code == 200
+
+
+def test_the_pages_the_marketplace_listing_points_at(tmp_path):
+    """A Workspace Marketplace listing must link a privacy notice, terms and a
+    support page, and the review checks they load and say the right things. A
+    404 or a privacy notice without the Limited Use wording fails the review,
+    and a failed review is weeks, not an afternoon.
+    """
+    from fastapi.testclient import TestClient
+
+    from scrapewright.service.app import create_app
+    from scrapewright.service.jobs import JobRegistry
+    from scrapewright.service.store import Store
+
+    client = TestClient(create_app(store=Store(tmp_path / "l.db"), jobs=JobRegistry()))
+
+    privacy = client.get("/privacy")
+    assert privacy.status_code == 200
+    # Google requires this disclosure in these words, near enough.
+    assert "Limited Use" in privacy.text
+    assert "api-services-user-data-policy" in privacy.text
+    # And it has to say what leaves the spreadsheet.
+    assert "myaccount.google.com/permissions" in privacy.text
+
+    support = client.get("/support")
+    assert support.status_code == 200
+    assert "mailto:" in support.text
 
 
 def test_the_landing_page_links_to_them(tmp_path):

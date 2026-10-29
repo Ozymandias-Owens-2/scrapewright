@@ -548,6 +548,9 @@ def create_app(store: Store | None = None,
     for path, filename in (("/terms", "terms.html"),
                            ("/refunds", "refunds.html"),
                            ("/privacy", "privacy.html"),
+                           # Required by the Workspace Marketplace listing, which
+                           # must point at a page saying how a user gets help.
+                           ("/support", "support.html"),
                            ("/account", "account.html"),
                            ("/blog", "blog.html"),
                            ("/blog/robots-txt", "blog-robots.html"),
