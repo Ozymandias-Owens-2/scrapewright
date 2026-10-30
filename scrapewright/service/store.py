@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS usage (
     records     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (key_id, day)
 );
+-- The compiled recipes, so they ride along to Tigris with everything else.
+-- Litestream replicates SQLite and nothing but SQLite, and the recipe cache
+-- is a JSON file on the volume: 58 recipes, no copy anywhere, and every one
+-- of them costs 300 credits to work out again. One row, replaced in place --
+-- the history that matters is Litestream's, not ours.
+CREATE TABLE IF NOT EXISTS recipe_backup (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    body     TEXT NOT NULL,
+    saved_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS signups (
     -- Hashed for the same reason as the email. Only the count matters.
     ip_hash     TEXT NOT NULL,
@@ -271,6 +281,20 @@ class Store:
                 "WHERE key_id = ?", (key_id,)
             ).fetchone()
         return int(row["bal"])
+
+    # ── the recipe cache, carried on Litestream's back ──────────────────────
+    def save_recipes(self, body: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO recipe_backup (id, body, saved_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET body = excluded.body, "
+                "saved_at = excluded.saved_at", (body, _now()))
+
+    def load_recipes(self) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT body FROM recipe_backup WHERE id = 1").fetchone()
+        return row["body"] if row else None
 
     def grant(self, key_id: str, amount: int, reason: str,
               idempotency_key: str | None = None) -> bool:

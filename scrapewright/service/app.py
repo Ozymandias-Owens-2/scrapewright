@@ -401,6 +401,20 @@ def create_app(store: Store | None = None,
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Before anything serves: if this machine came up on a volume without
+        # the recipe cache -- a fresh one, a restored one, a file lost to a
+        # torn write -- fill it from the database Litestream just restored.
+        # Only over nothing; a machine that still has its own file has the
+        # better copy.
+        from ..cache import default_cache_path
+        from . import recipe_backup
+        cache_path = os.environ.get("SCRAPEWRIGHT_CACHE") or default_cache_path()
+        try:
+            recipe_backup.restore_if_missing(store, cache_path)
+            recipe_backup.watch(store, cache_path)
+        except Exception:          # never let housekeeping stop the service
+            log.exception("recipes: backup could not be started")
+
         # The hosted MCP transport keeps a session manager that must be running
         # for the duration of the process; mounting alone does not start it.
         manager = getattr(app.state, "mcp_session_manager", None)

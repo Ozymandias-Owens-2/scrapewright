@@ -530,3 +530,31 @@ def test_health_says_which_stripe_world_it_is_wired_to(tmp_path, monkeypatch):
     assert mode_with(None) == "none"
     assert mode_with("sk_test_abc") == "test"
     assert mode_with("sk_live_abc") == "live"
+
+
+def test_the_vat_geography_is_disclosed_rather_than_discovered(tmp_path):
+    """A shop that sets VAT by the visitor's country quotes our machine the
+    French rate, because the machine is in Paris. Live, on an Odoo shop:
+    713.16 where a Belgian visitor sees 719.10. Close enough to look right.
+
+    This cannot be fixed from here -- it is where the server is -- so it has
+    to be said out loud. A number that is quietly six euros wrong is worse
+    than no number, and a customer should meet this in the documentation
+    rather than in their own spreadsheet.
+    """
+    from fastapi.testclient import TestClient
+
+    from scrapewright.service.app import create_app
+    from scrapewright.service.jobs import JobRegistry
+    from scrapewright.service.store import Store
+
+    client = TestClient(create_app(store=Store(tmp_path / "l.db"), jobs=JobRegistry()))
+
+    support = client.get("/support").text
+    assert "VAT" in support
+    assert "Paris" in support
+    # the actual numbers, so the reader can recognise the symptom
+    assert "713.16" in support and "719.10" in support
+
+    # and the landing page points at it rather than burying it
+    assert "/support" in client.get("/").text
