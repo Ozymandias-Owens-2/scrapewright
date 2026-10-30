@@ -55,6 +55,54 @@ def looks_js_shelled(html: str) -> bool:
     return visible_text_length(html) < SHELL_TEXT_THRESHOLD and bool(_SHELL_MARKERS.search(html))
 
 
+class SiteRefused(Exception):
+    """The site served a challenge instead of the page.
+
+    Cloudflare and friends answer 200 with a few kilobytes saying "checking
+    your browser". Nothing in the stack noticed: the extractor found no
+    price on it, the caller was told "Nothing found. Check the column
+    names", and the spreadsheet sent its owner to look at column names that
+    were perfectly correct. Worse, a page with no price looks like a site
+    worth compiling, so each refresh also bought a model call to read a
+    waiting-room.
+
+    This is not a wall to climb. It is a wall to report, once, in words
+    that say whose problem it is.
+    """
+
+    def __init__(self, url: str, marker: str):
+        self.url, self.marker = url, marker
+        super().__init__(f"{url} answered with an anti-bot challenge ({marker})")
+
+
+# Phrases that only appear on a challenge page. Matched against a small body
+# only: a real product page may well discuss cookies, and "enable JavaScript"
+# lives in the <noscript> of half the web.
+_CHALLENGE_MARKERS = (
+    "cf-browser-verification", "cf_chl_opt", "challenge-platform",
+    "just a moment...", "checking your browser",
+    "enable javascript and cookies to continue",
+    "please wait while your request is being verified",
+    "one moment, please", "attention required! | cloudflare",
+    "verifying you are human", "ddos protection by",
+)
+# A challenge is a stub. Real pages are an order of magnitude bigger, and the
+# size test is what keeps a product page that merely mentions Cloudflare from
+# being written off.
+_CHALLENGE_MAX_BYTES = 60_000
+
+
+def challenge_marker(html: str | None) -> str | None:
+    """Which challenge phrase this body carries, if it is one."""
+    if not html or len(html) > _CHALLENGE_MAX_BYTES:
+        return None
+    lowered = html.lower()
+    for marker in _CHALLENGE_MARKERS:
+        if marker in lowered:
+            return marker
+    return None
+
+
 class PageGone(Exception):
     """The item is no longer there, and the site answered with something else.
 

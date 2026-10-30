@@ -104,6 +104,62 @@ def current_price(element) -> str | None:
     return None
 
 
+# A shop that sets the euros and the cents in different type writes them as
+# different elements. elektrominne.be and dewittewinkel.be both do:
+#
+#   <div class="price-wrap" data-price="1349.99">
+#     <span class="txt-p-price">&euro; 1349</span>
+#     <span class="txt-textdecimal">,99</span>
+#
+# A selector on the visible span is not wrong -- that is where the price is --
+# it simply reads the part before the comma. 1349 instead of 1349.99 is the
+# worst kind of error: a column that looks filled and is quietly short by a
+# euro. The shop's own machine-readable figure settles it.
+_PRICE_ATTRS = ("data-price", "data-product-price", "data-amount", "content")
+_PRICE_ITEMPROP = re.compile(r"^(?:price|product:price:amount|"
+                             r"og:price:amount|lowPrice)$", re.IGNORECASE)
+
+
+def _declares_price(node) -> bool:
+    """Is this element's ``content`` attribute a price, or a description?
+
+    Only when the markup says so. A bare ``content`` is usually a meta tag
+    carrying the page's summary, and reading a price out of that is the
+    mistake prune_unusable already exists to undo.
+    """
+    for attr in ("itemprop", "property", "name"):
+        if _PRICE_ITEMPROP.match(str(node.get(attr) or "")):
+            return True
+    return False
+
+
+def declared_price(element, visible: str) -> str | None:
+    """A machine-readable price on this element or just above it.
+
+    Accepted only when it agrees with what the page shows: the whole-unit
+    part must match. Without that test a ``data-price`` on some outer
+    container -- a related product, a bundle, the cheapest variant -- would
+    silently replace the price actually on screen, which is a worse bug than
+    the one this fixes.
+    """
+    from ..models import parse_price
+
+    seen = parse_price(visible)
+    if seen is None:
+        return None
+    node, depth = element, 0
+    while node is not None and getattr(node, "name", None) and depth <= 2:
+        for attr in _PRICE_ATTRS:
+            raw = node.get(attr)
+            if not raw or (attr == "content" and not _declares_price(node)):
+                continue
+            stated = parse_price(str(raw))
+            if stated is not None and int(stated) == int(seen) and stated != seen:
+                return str(raw)
+        node, depth = node.parent, depth + 1
+    return None
+
+
 def holds_two_prices(text: str) -> bool:
     """Did this selector grab both the struck-through price and the real one?"""
     from ..models import parse_price
@@ -417,6 +473,11 @@ class SelectorExtractor(Extractor):
                     # what gets it another look.
                     if value and field in money_fields and mode == "text":
                         value = current_price(element)
+                        # Prefer the figure the shop states over the one it
+                        # chopped up for typography -- but only where the two
+                        # agree on the euros.
+                        if value:
+                            value = declared_price(element, value) or value
                     if value:
                         values[field] = value
 

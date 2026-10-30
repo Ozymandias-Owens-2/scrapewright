@@ -348,3 +348,65 @@ def test_one_compilation_per_request_even_when_the_browser_gives_nothing(tmp_pat
     sw.extract(URL, SCHEMA)
     assert browser.calls == 2, "the second hop never reached the browser"
     assert llm.calls == 1
+
+
+# ── a waiting-room is not a page ────────────────────────────────────────────
+CHALLENGE = ("<html><head><title>Just a moment...</title></head><body>"
+             "<div id='cf-browser-verification'>Checking your browser before "
+             "accessing the site.</div></body></html>")
+
+
+def test_a_challenge_page_is_never_compiled(tmp_path):
+    """koffieruis.be, live: Cloudflare answered 200 with a holding page. The
+    extractor found no price on it -- correctly -- so the row read "Nothing
+    found. Check the column names", about column names that were right, and
+    the site looked worth compiling on every single refresh.
+    """
+    from scrapewright.fetch import SiteRefused
+
+    class _Challenged:
+        def fetch(self, url): return CHALLENGE
+        def close(self): pass
+
+    cache = RecipeCache(tmp_path / "r.json")
+    llm = _Hopeless()
+    sw = Scrapewright(cache=cache, llm=llm, fetcher=_Challenged())
+
+    try:
+        sw.extract(URL, SCHEMA)
+    except SiteRefused as e:
+        assert "cf-browser-verification" in e.marker or "just a moment" in e.marker
+    else:
+        raise AssertionError("a challenge page was read as an ordinary page")
+
+    assert llm.calls == 0, "paid the model to read a waiting-room"
+    assert cache.compiles_today(URL, SCHEMA.name) == 0
+
+
+def test_a_browser_gets_its_turn_before_the_site_is_written_off(tmp_path):
+    """The static copy being a challenge says nothing about the rendered
+    one: plenty of walls let a real browser through."""
+    from scrapewright.extract.base import SelectorRecipe
+
+    class _Challenged:
+        def fetch(self, url): return CHALLENGE
+        def close(self): pass
+
+    class _BrowserGetsThrough:
+        alive = True
+        def fetch(self, url):
+            return '<html><body><p class="p">&euro;52,15</p></body></html>'
+        def close(self): pass
+
+    class _Reads:
+        def __init__(self): self.calls = 0
+        def synthesize(self, html, url, schema=None, **kw):
+            self.calls += 1
+            return SelectorRecipe(fields={"price": ".p"})
+
+    cache = RecipeCache(tmp_path / "r.json")
+    schema = Schema.from_names(["price:number"])
+    sw = Scrapewright(cache=cache, llm=_Reads(), fetcher=_Challenged(),
+                      browser=_BrowserGetsThrough())
+    record = sw.extract(URL, schema)
+    assert record is not None and float(record.data["price"]) == 52.15

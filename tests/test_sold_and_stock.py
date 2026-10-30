@@ -252,3 +252,62 @@ def test_a_selector_that_only_ever_finds_words_still_goes():
 def test_an_unanswered_field_is_still_unanswered():
     schema = Schema.from_names(["price", "in stock"])
     assert not schema.is_satisfied_by({"in stock": "En stock"})
+
+
+# ── euros and cents set in different type ───────────────────────────────────
+SPLIT_PRICE = """<html><body>
+  <h1>Jura E4</h1>
+  <div class="price-wrap" data-price="1349.99">
+    <span class="txt-p-price">&euro; 1349</span><span class="txt-textdecimal">,99</span>
+  </div>
+</body></html>"""
+
+
+def test_the_shops_own_figure_beats_the_half_it_shows():
+    """dewittewinkel.be and elektrominne.be, live: the column read 1349
+    instead of 1349.99 on every product. The selector was right -- that span
+    is where the price is -- but the cents live in the span next door and
+    the real number is on the wrapper."""
+    from scrapewright.extract.base import SelectorRecipe
+    from scrapewright.extract.selectors import SelectorExtractor
+    from scrapewright.schema import Schema
+
+    schema = Schema.from_names(["price:number"])
+    recipe = SelectorRecipe(fields={"price": ".txt-p-price"})
+    got = SelectorExtractor(recipe, schema).extract_values(SPLIT_PRICE, "https://shop.test/p")
+    assert float(got["price"]) == 1349.99
+
+
+def test_a_price_on_an_outer_box_does_not_hijack_this_one():
+    """The guard that makes the above safe: a data-price that disagrees with
+    what the page shows is somebody else's price -- a bundle, a related
+    product, the cheapest variant -- and replacing a visible number with it
+    would be a worse bug than the one being fixed."""
+    from scrapewright.extract.base import SelectorRecipe
+    from scrapewright.extract.selectors import SelectorExtractor
+    from scrapewright.schema import Schema
+
+    html = """<html><body><div class="card" data-price="899.00">
+      <span class="p">&euro; 1349</span></div></body></html>"""
+    schema = Schema.from_names(["price:number"])
+    got = SelectorExtractor(SelectorRecipe(fields={"price": ".p"}),
+                            schema).extract_values(html, "https://shop.test/p")
+    assert float(got["price"]) == 1349
+
+
+def test_a_bare_content_attribute_is_not_a_price():
+    """`content` is a price only where the markup says so. Otherwise it is
+    the page summary, and reading a price out of that is the mistake
+    prune_unusable exists to undo."""
+    from scrapewright.extract.selectors import declared_price
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(
+        '<meta name="description" content="1349.99 reasons to buy">'
+        '<span class="p">&euro; 1349</span>', "html.parser")
+    assert declared_price(soup.select_one(".p"), "€ 1349") is None
+
+    soup = BeautifulSoup(
+        '<div itemprop="price" content="1349.99">'
+        '<span class="p">&euro; 1349</span></div>', "html.parser")
+    assert declared_price(soup.select_one(".p"), "€ 1349") == "1349.99"

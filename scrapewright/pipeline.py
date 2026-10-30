@@ -46,8 +46,8 @@ from .extract.selectors import (SelectorExtractor, prune_unusable,
                                 widen_sale_selectors)
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
-from .fetch import (BrowserFetcher, PageGone, StaticFetcher,
-                    looks_js_shelled)
+from .fetch import (BrowserFetcher, PageGone, SiteRefused, StaticFetcher,
+                    challenge_marker, looks_js_shelled)
 from .like import canonical, find_similar, url_template
 from .mend import Mender
 from .models import Product, Record
@@ -320,6 +320,15 @@ class Scrapewright:
                 return self._extract_chain(html, url, schema, recipe, allow_llm, True)
 
         html = self.fetcher.fetch(url)
+        # A waiting-room is not a page. Cloudflare answers 200 with a few
+        # kilobytes saying "checking your browser"; the extractor finds no
+        # price on it -- correctly -- and the caller is told "Nothing found,
+        # check the column names" about columns that were right. Worse, a
+        # page with no price reads as a site worth compiling, so every
+        # refresh also bought a model call to study a notice.
+        refused = challenge_marker(html)
+        if refused and not self._can_js():
+            raise SiteRefused(url, refused)
 
         # Nothing learned about this site yet, and a browser is available:
         # teach on the rendered page. Learning on the static copy first and
@@ -350,7 +359,8 @@ class Scrapewright:
         # An empty client-side shell can't be extracted from and isn't worth an
         # LLM call — go straight to the browser when one is available.
         record = None
-        if html is not None and not (self._can_js() and looks_js_shelled(html)):
+        if (html is not None and not refused
+                and not (self._can_js() and looks_js_shelled(html))):
             record = self._extract_chain(html, url, schema, recipe, allow_llm, False)
             if record is not None and schema.is_satisfied_by(record.data):
                 # Satisfied is not complete. A dealer's car page carries its
@@ -381,7 +391,14 @@ class Scrapewright:
 
         rendered = self._browser_fetch(url)
         if rendered is None:
+            if refused:
+                raise SiteRefused(url, refused)
             return record
+        still_refused = challenge_marker(rendered)
+        if still_refused:
+            # A browser did not get past it either. Nothing here is ours to
+            # fix, and nothing more is worth paying for.
+            raise SiteRefused(url, still_refused)
         allow_llm = allow_llm and self._synth_calls == synth_at_entry
         # The static hop may have just written a recipe. Read it back before
         # rendering, or the browser pass starts from nothing and pays the model
@@ -426,6 +443,12 @@ class Scrapewright:
         rendered = self._browser_fetch(url)
         if rendered is None:
             return None, False
+        blocked = challenge_marker(rendered)
+        if blocked:
+            # Before the model is called, not after: this is the hop that
+            # pays for a compilation, and a challenge page is the one thing
+            # certain not to be worth one.
+            raise SiteRefused(url, blocked)
         record = self._extract_chain(rendered, url, schema, None, True, True)
         if record is None or not schema.is_satisfied_by(record.data):
             return None, True
