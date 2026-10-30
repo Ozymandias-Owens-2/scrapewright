@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support — scrapewright</title>
+<link rel="stylesheet" href="/static/legal.css">
+</head>
+<body>
+<div class="wrap">
+<a class="mark" href="/"><span class="dot"></span> scrapewright</a>
+
+<h1>Support</h1>
+<p class="updated">Last updated 29 October 2026</p>
+
+<div class="callout">
+Email <a href="mailto:fedordyatlov@outlook.com?subject=Sheetwatch%20support">fedordyatlov@outlook.com</a>.
+One person reads it, usually the same day and at worst within two working days.
+Include the sheet's URL column value for a row that is behaving oddly &mdash; that is
+almost always enough to find the problem.
+</div>
+
+<h2>Setting up a sheet</h2>
+<p>Row 1 holds the headers. One column holds page addresses: name it <strong>URL</strong>
+(or Link, Page, Website &mdash; several spellings are recognised, and failing that the
+first column whose first value starts with <code>http</code>). Every other header is a
+field you want filled, written in plain words: <em>price</em>, <em>in stock</em>,
+<em>delivery time</em>. The add-on writes two columns of its own, <strong>Status</strong>
+and <strong>Checked</strong>. A header starting with <code>#</code> is yours and is never
+touched.</p>
+<p>Then <em>Extensions &rarr; Sheetwatch &rarr; Fill / refresh now</em>.</p>
+
+<h2>What the Status column is telling you</h2>
+<ul>
+  <li><strong>ok</strong> &mdash; the page was read.</li>
+  <li><strong>Nothing found</strong> &mdash; the page was fetched but nothing matching your
+      column names was on it. Usually a column named something the page does not say,
+      or a page that needs a login. Rename the column to the words the page itself
+      uses and try again.</li>
+  <li><strong>Page is gone</strong> &mdash; the address now redirects elsewhere; the item is
+      no longer listed. The row is left alone and costs nothing to keep.</li>
+  <li><strong>Still working: row N of M</strong> &mdash; Google stops any script after six
+      minutes, so a long sheet is read in pieces. It carries on by itself about a
+      minute later. Nothing is needed from you, and pressing refresh again only
+      re-reads rows that are already done.</li>
+  <li><strong>Connect your account</strong> &mdash; no key yet, or the key was replaced. Use
+      <em>Connect account</em> in the menu.</li>
+  <li><strong>Out of credits</strong> &mdash; top up at
+      <a href="https://scrapewright.app/account">scrapewright.app/account</a>.</li>
+  <li><strong>Temporary error, will retry</strong> &mdash; our side, not yours. The row is
+      read on the next pass.</li>
+</ul>
+
+<h2>Things people ask</h2>
+<p><strong>A cell went empty and turned yellow.</strong> The page was read and the value
+is no longer on it &mdash; a price withdrawn, an item sold. That is a change like any
+other, so it is logged and highlighted. The old value is in the cell's note. A watch
+that kept showing yesterday's price would be reporting a price nobody is asking any
+more, which is the one thing it exists not to do.</p>
+<p><strong>A row says "Nothing found" and I think the page is fine.</strong> We remember a
+page we could not read and stop charging for it, so refreshing will not try again.
+<em>Try the pages that found nothing again</em> in the menu asks us to pay for another
+look. It is a separate menu item because it costs credits and an ordinary refresh
+does not.</p>
+<p><strong>What does a refresh cost?</strong> A page already learned costs one credit per
+row, plus five if it has to be rendered in a browser. Learning a new site costs more,
+once. A forty-row sheet of familiar shops is usually well under a hundred credits, and
+the free monthly allowance is a thousand.</p>
+<p><strong>A price here does not match the price I see.</strong> Check whether
+the shop sets VAT by the visitor's country &mdash; Odoo shops do this, and so do
+many others. We read pages from a machine in <strong>Paris</strong>, so such a
+shop quotes us the <strong>French</strong> rate of 20%, while you looking from
+Brussels see 21%. On a &euro;594 machine that is &euro;713.16 against &euro;719.10:
+close enough to look right and wrong by six euros.</p>
+<p>This affects only shops that vary the displayed price by country. A shop
+with one price for everyone reads correctly everywhere. If it matters to your
+sheet, say so &mdash; reading from a machine in the right country is a change we
+can make, and knowing which countries you need is what decides where.</p>
+
+<p><strong>Can I refresh automatically?</strong> <em>Refresh every day</em> in the menu, which
+runs each morning. Rows that answered "Nothing found" or "Page is gone" are skipped by
+the scheduled run so it cannot quietly spend your credits on pages that will not
+answer.</p>
+
+<h2>Reporting a problem</h2>
+<p>Email the address above with the page address, the column name, and what you
+expected. If a whole run misbehaved, say roughly when it ran &mdash; every request is
+timestamped on our side and that is usually enough to reconstruct it exactly.</p>
+<p>Bugs in the add-on itself can also be raised at
+<a href="https://github.com/Ozymandias-Owens-2/scrapewright/issues">GitHub</a>.</p>
+
+<h2>Deleting your data</h2>
+<p>Remove the add-on, or revoke its access at
+<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+To delete the account behind your key as well, see the
+<a href="/privacy">privacy notice</a>.</p>
+
+<footer>
+<a href="/">Home</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> ·
+<a href="/refunds">Refunds</a> ·
+<a href="https://github.com/Ozymandias-Owens-2/scrapewright">Source</a>
+</footer>
+</div>
+</body>
+</html>
