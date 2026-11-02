@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field
 from .. import __version__
 from ..detect import detect
 from ..extract.llm import ProviderError
-from ..fetch import PageGone, SiteRefused
+from ..fetch import ItemSold, PageGone, SiteRefused
 from ..robots import RobotsDisallowed
 from ..robots import check as check_robots
 from ..safeurl import UnsafeUrl, check_syntax
@@ -664,6 +664,17 @@ def create_app(store: Store | None = None,
             # instead.
             log.info("gone: %s -> %s", e.requested, e.final)
             raise HTTPException(status.HTTP_410_GONE, _gone_detail(e)) from e
+        except ItemSold as e:
+            # Same answer as PageGone, reached the other way: the listing
+            # never moved, it just finished. A watcher needs to hear "sold",
+            # not "nothing found" -- the second one reads as our fault and
+            # sends them to check column names that are fine.
+            log.info("sold: %s (%s)", e.url, e.marker)
+            raise HTTPException(
+                status.HTTP_410_GONE,
+                f'the page says "{e.marker}" and carries no price; '
+                f"the item is no longer for sale"
+            ) from e
         except SiteRefused as e:
             # Not "nothing found". The site served a challenge instead of
             # the page, and telling a spreadsheet owner to check their

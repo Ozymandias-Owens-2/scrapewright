@@ -103,6 +103,56 @@ def challenge_marker(html: str | None) -> str | None:
     return None
 
 
+# A listing that is finished still answers 200 and still has a page. These
+# are the words a dealer puts where the price used to be. "Sold out" and
+# "out of stock" are deliberately absent: a shop page says either of those
+# and still shows the price the sheet is watching.
+_SOLD_MARKERS = (
+    "verkocht", "verkauft", "vendu", "vendue", "vendido", "venduto",
+    "no longer available", "niet meer beschikbaar",
+    "nicht mehr verfügbar", "plus disponible",
+)
+
+
+def sold_marker(html: str | None) -> str | None:
+    """Which "this one is gone" word the visible page carries, if any.
+
+    Only ever asked after extraction has already come back empty, so a word
+    used loosely somewhere on a page cannot overwrite a price that was
+    found. Scripts and templates are dropped first: greenestcosmetics.com
+    carries "sold out" in a theme template on a product that is in stock.
+    """
+    if not html:
+        return None
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "template", "noscript"]):
+        tag.decompose()
+    # Padded with spaces at every non-letter, so "verkocht" does not match
+    # inside "verkochte campers" in a navigation menu.
+    words = " " + "".join(
+        c if c.isalnum() else " " for c in soup.get_text(" ").lower()) + " "
+    for marker in _SOLD_MARKERS:
+        if f" {marker} " in words:
+            return marker
+    return None
+
+
+class ItemSold(Exception):
+    """The page is still there, and it says the item is sold.
+
+    The sibling of :class:`PageGone`: nothing moved, the listing simply
+    finished. mobiledrome.nl kept a sold camper at its own URL with
+    "Verkocht" where the price had been. The sheet read that as "Nothing
+    found", which sends the owner off to fix column names that were never
+    wrong, and hides the one fact they were watching for.
+    """
+
+    def __init__(self, url: str, marker: str):
+        self.url, self.marker = url, marker
+        super().__init__(f"{url} says {marker}")
+
+
 class PageGone(Exception):
     """The item is no longer there, and the site answered with something else.
 

@@ -46,8 +46,9 @@ from .extract.selectors import (SelectorExtractor, prune_unusable,
                                 widen_sale_selectors)
 from .extract.shopify import ShopifyExtractor
 from .extract.woocommerce import WooCommerceExtractor
-from .fetch import (BrowserFetcher, PageGone, SiteRefused, StaticFetcher,
-                    challenge_marker, looks_js_shelled)
+from .fetch import (BrowserFetcher, ItemSold, PageGone, SiteRefused,
+                    StaticFetcher, challenge_marker, looks_js_shelled,
+                    sold_marker)
 from .like import canonical, find_similar, url_template
 from .mend import Mender
 from .models import Product, Record
@@ -317,7 +318,9 @@ class Scrapewright:
         if recipe is not None and recipe.needs_js and self._can_js():
             html = self._browser_fetch(url)
             if html is not None:
-                return self._extract_chain(html, url, schema, recipe, allow_llm, True)
+                return self._verdict(
+                    self._extract_chain(html, url, schema, recipe, allow_llm,
+                                        True), schema, url, html)
 
         html = self.fetcher.fetch(url)
         # A waiting-room is not a page. Cloudflare answers 200 with a few
@@ -387,7 +390,7 @@ class Scrapewright:
                 self.cache.note_failure(url, schema.name,
                                         "synthesis produced no usable recipe",
                                         mode="static")
-            return record
+            return self._verdict(record, schema, url, html)
 
         rendered = self._browser_fetch(url)
         if rendered is None:
@@ -423,7 +426,7 @@ class Scrapewright:
             self.cache.note_failure(url, schema.name,
                                     "synthesis produced no usable recipe",
                                     mode="js")
-        return best
+        return self._verdict(best, schema, url, rendered)
 
     def _teach_on_rendered(self, url: str, schema: Schema,
                            static_html: str) -> tuple[Record | None, bool]:
@@ -501,6 +504,21 @@ class Scrapewright:
     def _recipe_covers(self, url: str, schema: Schema) -> bool:
         return self._covers_enough(self.cache.get(url, schema.name), schema)
 
+    def _verdict(self, record: Record | None, schema: Schema, url: str,
+                 html: str | None) -> Record | None:
+        """Nothing found, or nothing left to find? They are not the same.
+
+        A finished listing reads exactly like a page we failed on, and the
+        difference matters to whoever is watching the price: one says our
+        reader broke, the other is the answer they were waiting for.
+        """
+        if self._answered(record, schema):
+            return record
+        marker = sold_marker(html)
+        if marker:
+            raise ItemSold(url, marker)
+        return record
+
     def _extract_chain(self, html: str, url: str, schema: Schema, recipe,
                        allow_llm: bool, js_used: bool) -> Record | None:
         """cached recipe → JSON-LD → LLM synthesis, against one HTML document."""
@@ -524,15 +542,29 @@ class Scrapewright:
                 return record
             # Stale/weak recipe — the site probably changed. Heal below.
 
-        # schema.org markup describes products; it has nothing to say about a
-        # caller-defined schema, so this free hop is product-only.
+        # schema.org markup describes products, and a caller-defined schema
+        # asking for "price" is asking for a product field under its own
+        # name. Gating this free hop on the schema being literally named
+        # "product" meant the spreadsheet add-on never reached it: it builds
+        # custom-<hash> out of the sheet's column headers, so every row paid
+        # 300 credits for synthesis of a price that was sitting in the page's
+        # JSON-LD. Offer the hop to any schema and let is_satisfied_by decide.
         jsonld = None
-        if schema.name == PRODUCT_SCHEMA.name:
-            product = JsonLdExtractor().extract_page(html, url)
-            if product is not None:
-                jsonld = _record_from_product(product, schema.name)
-                if schema.is_satisfied_by(jsonld.data):
-                    return jsonld
+        product = JsonLdExtractor().extract_page(html, url)
+        if product is not None:
+            jsonld = _record_from_product(product, schema.name)
+            # Only what was actually asked for: a caller wanting "price" is
+            # not served by being handed an sku and a description as well.
+            wanted = {f.lower() for f in schema.field_names}
+            jsonld.data = {k: v for k, v in jsonld.data.items()
+                           if k.lower() in wanted}
+            # Nothing the caller asked for is not a partial answer; it is no
+            # answer, and the "best effort" return below must not hand back
+            # an empty record where it used to hand back None.
+            if not jsonld.data:
+                jsonld = None
+            elif schema.is_satisfied_by(jsonld.data):
+                return jsonld
 
         if not allow_llm:
             return jsonld  # best effort (may be None or partial)
@@ -581,7 +613,7 @@ class Scrapewright:
         """
         try:
             return self.extract(url, schema, allow_llm=allow_llm)
-        except PageGone:
+        except (PageGone, ItemSold):
             return None
 
     # ── Typed product path ───────────────────────────────────────────────────
