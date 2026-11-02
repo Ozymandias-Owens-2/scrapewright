@@ -44,9 +44,15 @@ primary_region = "cdg"        # Fly has no Madrid; Paris is the closest edge
   # Long enough to queue behind a render rather than be refused: a batch of
   # four arrives at once and a render takes twenty to thirty seconds.
   BROWSER_WAIT_SECONDS = "60"
-  # Matched to the renders above and to the add-on's batch size. Lower, and
-  # a client sending a full batch gets a 429 for the tail of it.
-  MAX_IN_FLIGHT_PER_KEY = "4"
+  # Twice the add-on's batch size, not equal to it. Matching it exactly left
+  # no headroom at all: the add-on sends four at once, so a second sheet, a
+  # continuation trigger overlapping its parent, or a manual refresh during
+  # the nightly run put a fifth request on the same key and the tail of the
+  # batch came back 429 -- "Limit reached" written into cells whose pages
+  # were fine. Renders are capped separately by BROWSER_SLOTS, so this
+  # number does not let more browsers run; it only stops the client
+  # tripping over itself.
+  MAX_IN_FLIGHT_PER_KEY = "8"
   # Where Stripe sends a customer back after paying, and what the registry
   # listing points at.
   PUBLIC_BASE_URL = "https://scrapewright.app"

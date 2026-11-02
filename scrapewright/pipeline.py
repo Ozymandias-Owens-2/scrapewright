@@ -564,6 +564,11 @@ class Scrapewright:
             if not jsonld.data:
                 jsonld = None
             elif schema.is_satisfied_by(jsonld.data):
+                # A URL that answers is not a URL we failed on. Nothing goes
+                # into the cache on this path -- there is no recipe to write
+                # -- so a note left by an earlier attempt would outlive the
+                # problem and go on reporting a readable page as unreadable.
+                self.cache.clear_failure(url, schema.name)
                 return jsonld
 
         if not allow_llm:

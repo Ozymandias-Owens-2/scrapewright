@@ -97,3 +97,17 @@ def test_an_unreadable_page_that_says_nothing_still_reads_as_nothing(tmp_path):
     record = sw.extract("https://dealer.example.com/knaus/",
                         Schema.from_names(["price"]))
     assert record is None or not record.data.get("price")
+
+
+def test_a_free_answer_clears_the_note_left_by_an_earlier_failure(tmp_path):
+    """The JSON-LD hop writes no recipe, so nothing else would ever lift the
+    note -- and a readable page would keep being listed as unreadable."""
+    sw = _sw(tmp_path, JSONLD_PAGE)
+    schema = Schema.from_names(["price"])
+    url = "https://greenest.example.com/balm-to-milk/"
+    sw.cache.note_failure(url, schema.name, "written off earlier")
+    assert sw.cache.failed_at(url, schema.name) is not None
+
+    assert sw.extract(url, schema).data["price"] is not None
+
+    assert sw.cache.failed_at(url, schema.name) is None
