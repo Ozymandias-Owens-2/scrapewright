@@ -936,6 +936,18 @@ def create_app(store: Store | None = None,
         finally:
             sw.close()
 
+        if not records:
+            # Zero rows is not a demonstration. The catalogue answered a
+            # moment ago -- detect() just read it -- so an empty result here
+            # means the shop refused the second request, which Shopify does
+            # to our address often enough that the nightly probe caught it
+            # twice in one day. Reporting it as a successful run of no rows
+            # shows a visitor an empty table and tells the probe nothing.
+            raise HTTPException(
+                422, "that shop's catalogue gave us nothing just now -- it "
+                     "sometimes rate-limits us. Try again in a minute, or "
+                     "another shop.")
+
         return {"platform": det.kind, "count": len(records), "records": records,
                 "note": f"The demo stops at {DEMO_MAX_RECORDS} rows. "
                         f"A free key gives you 1,000."}

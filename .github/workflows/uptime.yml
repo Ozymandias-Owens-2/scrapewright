@@ -52,11 +52,25 @@ jobs:
           BASE="${BASE_URL:-https://scrapewright-api.fly.dev}"
           # Reaches the whole path a stranger takes: detection, fetching,
           # parsing. A 429 means the limiter is doing its job, not an outage.
-          code=$(curl --silent --show-error --max-time 120 -o /tmp/demo.json -w '%{http_code}' \
+          # Twice, a minute apart. The shop rate-limits our address now and
+          # then and answers the catalogue request with nothing; that is the
+          # shop having a moment, not an outage, and paging about it teaches
+          # everyone to ignore the alert. Two refusals a minute apart is no
+          # longer a moment.
+          probe() {
+            curl --silent --show-error --max-time 120 -o /tmp/demo.json -w '%{http_code}' \
                  -X POST "$BASE/v1/demo" \
                  -H 'Content-Type: application/json' \
-                 -d '{"url": "https://www.isaacsellam.com"}')
+                 -d '{"url": "https://www.isaacsellam.com"}'
+          }
+          code=$(probe)
           echo "demo: HTTP $code"
+          if [ "$code" = "422" ]; then
+            echo "the shop gave us nothing; waiting a minute and asking again"
+            sleep 60
+            code=$(probe)
+            echo "demo, second try: HTTP $code"
+          fi
           if [ "$code" = "429" ]; then
             echo "rate limited -- the endpoint is alive, nothing to report"
             exit 0

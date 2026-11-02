@@ -119,3 +119,32 @@ def _stub_pipeline(seen: dict | None = None):
             pass
 
     return StubPipeline
+
+
+def test_an_empty_catalogue_is_not_a_successful_demo(client, store, monkeypatch):
+    """Zero rows is not a demonstration.
+
+    detect() has just read the shop's catalogue, so nothing coming back from
+    the second request means the shop refused it -- Shopify does this to our
+    address often enough that the nightly probe caught it twice in one day.
+    Returning 200 with count 0 showed a visitor an empty table and told the
+    probe only "no rows", which is the symptom and not the cause.
+    """
+    class _EmptyPipeline:
+        def __init__(self, *a, **kw):
+            pass
+
+        def crawl_records(self, url, **kw):
+            return iter(())
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(app_module, "detect",
+                        lambda url, **kw: FakeDetection("shopify", "catalog"))
+    monkeypatch.setattr(app_module, "Scrapewright", _EmptyPipeline)
+
+    answer = client.post("/v1/demo", json={"url": "https://shop.test"})
+
+    assert answer.status_code == 422
+    assert "rate-limits" in answer.json()["detail"]
