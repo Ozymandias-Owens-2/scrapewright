@@ -11,7 +11,7 @@
 <a class="mark" href="/"><span class="dot"></span> scrapewright</a>
 
 <h1>Privacy notice</h1>
-<p class="updated">Last updated 29 October 2026</p>
+<p class="updated">Last updated 3 November 2026</p>
 
 <div class="callout">
 Short version: your email address and IP are stored as one-way hashes and cannot be
@@ -89,6 +89,35 @@ is fetched by this service from the public web, not taken from your spreadsheet.
 <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>,
 stops all of this at once. Anything already written to your sheet is yours and stays
 there.</p>
+
+<h2>How it is protected</h2>
+<ul>
+  <li><strong>In transit.</strong> The service answers only over HTTPS; plain HTTP is
+      redirected, never served. That covers every call the add-on makes, the whole of
+      this site, and the dashboard.</li>
+  <li><strong>At rest.</strong> The database sits on an encrypted volume
+      (Fly.io, Paris region, platform-managed keys). Should the underlying disk ever
+      be read without us, it reads as ciphertext.</li>
+  <li><strong>One-way by design.</strong> The three pieces of data that identify you
+      &mdash; your email address, your IP address and your API key &mdash; are stored
+      only as SHA-256 hashes, as described above. This is not access control that can
+      be misconfigured; there is no readable copy to leak, and we could not produce
+      one if compelled to.</li>
+  <li><strong>Secrets.</strong> Credentials the service needs (the model API key, the
+      payment keys) are held in the host's encrypted secret store and injected into the
+      running process. They are not in the source repository, which is public, and not
+      in the database.</li>
+  <li><strong>Access.</strong> One person operates this service &mdash; the controller
+      named at the top. Nobody else holds credentials to the host, the database or the
+      secret store. There is no support team with a console, because there is no
+      support team.</li>
+  <li><strong>Payments.</strong> Card details are entered on Stripe's own pages and
+      never traverse this service. We receive a customer reference and the fact that a
+      payment succeeded.</li>
+</ul>
+<p>No service can promise it will never be breached, and this one does not. What it can
+say is that the data worth stealing was hashed before it was written, so a breach of the
+database yields usage counts and URLs rather than a list of people.</p>
 
 <h2>Third parties</h2>
 <ul>
